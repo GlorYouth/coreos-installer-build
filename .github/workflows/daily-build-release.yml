@@ -31,7 +31,7 @@ jobs:
 
       - name: Build coreos-installer
         # 恢复使用 cargo build --release --locked，确保二进制文件在 target/release/
-        run: cargo install coreos-installer --target-dir .
+        run: cargo install coreos-installer --target-dir . && ls
 
       - name: Calculate current coreos-installer SHA256 and save to file
         id: calculate_sha
