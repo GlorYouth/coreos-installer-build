@@ -31,7 +31,7 @@ jobs:
 
       - name: Build coreos-installer
         # 恢复使用 cargo build --release --locked，确保二进制文件在 target/release/
-        run: cargo build --release --locked
+        run: cargo install coreos-installer --target-dir .
 
       - name: Calculate current coreos-installer SHA256 and save to file
         id: calculate_sha
@@ -99,7 +99,7 @@ jobs:
           # 注意：coreos-installer_sha256.txt 已经在 calculate_sha 步骤中创建了
           # 这里不再需要重复创建，但确保它在 release_assets 目录中以便上传（如果需要作为发布资产的话）
           # 如果你只希望它作为artifact上传，而不作为release资产，这里就不需要复制
-          cp ./.github/coreos-installer_sha256.txt release_assets/coreos-installer_sha256.txt # 如果需要作为发布资产
+          # cp ./.github/coreos-installer_sha256.txt release_assets/coreos-installer_sha256.txt # 如果需要作为发布资产
 
       - name: Create Release
         uses: softprops/action-gh-release@v1
