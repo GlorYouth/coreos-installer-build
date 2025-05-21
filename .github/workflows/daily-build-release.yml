@@ -94,7 +94,7 @@ jobs:
           unzip coreos-installer-source.zip -d coreos-installer-source
           
           # 找到实际的源码目录
-          COREOS_INSTALLER_DIR=$(find coreos-installer-source -maxdepth 1 -mindepth 1 -type d -name "coreos-installer-*")
+          COREOS_INSTALLER_DIR=$(find coreos-installer-source -maxdepth 1 -mindepth 1 -type d -name "*coreos-installer-*")
           
           # 检查 COREOS_INSTALLER_DIR 是否找到
           if [ -z "$COREOS_INSTALLER_DIR" ]; then
