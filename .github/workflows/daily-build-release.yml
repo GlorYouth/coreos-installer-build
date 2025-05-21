@@ -94,7 +94,8 @@ jobs:
           unzip coreos-installer-source.zip -d coreos-installer-source
           
           # 找到实际的源码目录
-          COREOS_INSTALLER_DIR=$(find coreos-installer-source -maxdepth 1 -mindepth 1 -type d -name "*coreos-installer-*")
+          # 修复: 使用 ls -d 查找唯一的子目录，因为 find 的模式可能不匹配
+          COREOS_INSTALLER_DIR=$(ls -d coreos-installer-source/*/)
           
           # 检查 COREOS_INSTALLER_DIR 是否找到
           if [ -z "$COREOS_INSTALLER_DIR" ]; then
@@ -242,7 +243,8 @@ jobs:
           unzip coreos-installer-source.zip -d coreos-installer-source
           
           # 找到实际的源码目录
-          COREOS_INSTALLER_DIR=$(find coreos-installer-source -maxdepth 1 -mindepth 1 -type d -name "coreos-installer-*")
+          # 修复: 使用 ls -d 查找唯一的子目录，因为 find 的模式可能不匹配
+          COREOS_INSTALLER_DIR=$(ls -d coreos-installer-source/*/)
           
           # 检查 COREOS_INSTALLER_DIR 是否找到
           if [ -z "$COREOS_INSTALLER_DIR" ]; then
@@ -330,15 +332,15 @@ jobs:
           # 直接使用 Job 级别的环境变量
           # 例如：coreos-installer-0.20.0-x86_64-unknown-linux-gnu
           cp "./downloaded_release_assets/coreos-installer-x86_64/coreos-installer-x86_64" \
-             "release_assets/coreos-installer-${{ env.VERSION_PREFIX }}-x86_64-unknown-linux-gnu"
+               "release_assets/coreos-installer-${{ env.VERSION_PREFIX }}-x86_64-unknown-linux-gnu"
           cp "./downloaded_release_assets/coreos-installer-x86_64/coreos-installer-x86_64.sha256" \
-             "release_assets/coreos-installer-${{ env.VERSION_PREFIX }}-x86_64-unknown-linux-gnu.sha256"
+               "release_assets/coreos-installer-${{ env.VERSION_PREFIX }}-x86_64-unknown-linux-gnu.sha256"
 
           # 移动 aarch64 资产并重命名
           cp "./downloaded_release_assets/coreos-installer-aarch64/coreos-installer-aarch64" \
-             "release_assets/coreos-installer-${{ env.VERSION_PREFIX }}-aarch64-unknown-linux-gnu"
+               "release_assets/coreos-installer-${{ env.VERSION_PREFIX }}-aarch64-unknown-linux-gnu"
           cp "./downloaded_release_assets/coreos-installer-aarch64/coreos-installer-aarch64.sha256" \
-             "release_assets/coreos-installer-${{ env.VERSION_PREFIX }}-aarch64-unknown-linux-gnu.sha256"
+               "release_assets/coreos-installer-${{ env.VERSION_PREFIX }}-aarch64-unknown-linux-gnu.sha256"
           
           # 生成一个总的 SHA256SUMS 文件
           sha256sum release_assets/* > release_assets/SHA256SUMS
