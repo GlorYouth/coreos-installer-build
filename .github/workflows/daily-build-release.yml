@@ -29,7 +29,7 @@ jobs:
       date_name: ${{ steps.get_date.outputs.date_name }}                   # 输出当前日期名称 (例如 2023-10-26)
       needs_release: ${{ steps.compare_versions.outputs.needs_release }}   # 输出是否需要发布新版本的标志 (true/false)
     permissions:
-      contents: write # 授予写入权限以创建 ./.github/coreos-installer_current_version.txt
+      contents: write # 为了写入文件 (如果需要提交回仓库的话，但这里主要用于 artifact)
       actions: write  # 授予写入权限以上传/下载 artifacts
 
     steps:
@@ -96,10 +96,9 @@ jobs:
       - name: Prepare current version file # 准备当前版本文件
         id: prepare_current_version
         run: |
-          # 将当前的官方版本号保存到文件中，用于后续上传 artifact
-          mkdir -p ./.github/ # 确保目录存在
-          echo "${{ steps.get_release.outputs.tag_name }}" > ./.github/coreos-installer_current_version.txt
-          echo "已将当前版本 ${{ steps.get_release.outputs.tag_name }} 写入 ./.github/coreos-installer_current_version.txt"
+          # 将当前的官方版本号保存到工作区根目录下的文件中，用于后续上传 artifact
+          echo "${{ steps.get_release.outputs.tag_name }}" > coreos_installer_version.txt
+          echo "已将当前版本 ${{ steps.get_release.outputs.tag_name }} 写入 coreos_installer_version.txt"
 
       - name: Download previous version artifact # 下载上一次记录的版本号 artifact
         uses: actions/download-artifact@v4
@@ -111,14 +110,16 @@ jobs:
       - name: Compare with Previous Version # 与上一个记录的版本进行比较
         id: compare_versions
         run: |
-          DOWNLOADED_PREVIOUS_VERSION_FILE="./downloaded_artifacts/previous-coreos-version/coreos-installer_version.txt"
+          # 下载的构件会存放在 ./downloaded_artifacts/previous-coreos-version/ 目录下
+          # 文件名与上传时一致
+          DOWNLOADED_PREVIOUS_VERSION_FILE="./downloaded_artifacts/previous-coreos-version/coreos_installer_version.txt"
           PREVIOUS_VERSION=""
 
           if [ -f "$DOWNLOADED_PREVIOUS_VERSION_FILE" ]; then
             PREVIOUS_VERSION=$(cat "$DOWNLOADED_PREVIOUS_VERSION_FILE")
             echo "上一次记录的 coreos-installer 版本号 (来自 artifact): $PREVIOUS_VERSION"
           else
-            echo "未找到上一次记录的 coreos-installer 版本号 artifact。"
+            echo "未找到上一次记录的 coreos-installer 版本号 artifact (文件 $DOWNLOADED_PREVIOUS_VERSION_FILE 不存在)。"
           fi
 
           CURRENT_VERSION="${{ steps.get_release.outputs.tag_name }}"
@@ -138,9 +139,9 @@ jobs:
           elif [ "$FORCE_RELEASE_INPUT" = "true" ]; then
               NEEDS_RELEASE="true"
               echo "强制发布输入为 true。需要发布新版本 (跳过版本号比较)。"
-          elif [ -z "$PREVIOUS_VERSION" ]; then # 首次运行或者 artifact 已过期
+          elif [ -z "$PREVIOUS_VERSION" ]; then # 首次运行或者 artifact 已过期或未成功下载
               NEEDS_RELEASE="true"
-              echo "未找到上一个版本号 (首次运行或 artifact 已过期)。需要发布新版本。"
+              echo "未找到上一个版本号 (首次运行、artifact 已过期或下载失败)。需要发布新版本。"
           elif [ "$CURRENT_VERSION" != "$PREVIOUS_VERSION" ]; then
               NEEDS_RELEASE="true"
               echo "官方版本号已更新 (当前: $CURRENT_VERSION, 上次记录: $PREVIOUS_VERSION)。需要发布新版本。"
@@ -154,7 +155,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: previous-coreos-version # artifact 名称，用于下次比较
-          path: ./.github/coreos-installer_current_version.txt # 要上传的文件路径
+          path: coreos_installer_version.txt # 上传位于工作区根目录的文件
           # retention-days: 7 # artifact 保留天数，可以根据需要调整或移除以使用默认值
         if: always() # 无论比较结果如何，都尝试上传（如果文件已准备好）
 
