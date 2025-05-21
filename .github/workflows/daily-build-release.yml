@@ -168,12 +168,26 @@ jobs:
       RELEASE_ZIP_URL: ${{ needs.get-latest-release-info.outputs.release_url }}
       COREOS_INSTALLER_OFFICIAL_TAG: ${{ needs.get-latest-release-info.outputs.release_tag }}
       RELEASE_VERSION_PREFIX: ${{ needs.get-latest-release-info.outputs.release_version_prefix }}
-      ARM64_UBUNTU_PORTS_SOURCES: | # 为 arm64 定义 APT 源文件内容
+      ARM64_UBUNTU_PORTS_SOURCES: | # 为 arm64 定义 APT 源文件内容 (来自 ports.ubuntu.com)
         Types: deb
         URIs: http://ports.ubuntu.com/ubuntu-ports
         Suites: noble noble-updates noble-backports noble-security
         Components: main restricted universe multiverse
         Architectures: arm64
+        Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg
+      AMD64_ONLY_UBUNTU_SOURCES: | # 定义一个仅用于 amd64 的主要 Ubuntu 源文件内容
+        Types: deb
+        URIs: http://azure.archive.ubuntu.com/ubuntu/
+        Suites: noble noble-updates noble-backports
+        Components: main restricted universe multiverse
+        Architectures: amd64
+        Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg
+
+        Types: deb
+        URIs: http://security.ubuntu.com/ubuntu/
+        Suites: noble-security
+        Components: main restricted universe multiverse
+        Architectures: amd64
         Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg
     strategy:
       matrix:
@@ -223,28 +237,32 @@ jobs:
 
       - name: Install build dependencies for ${{ matrix.target.name }} # 为 ${{ matrix.target.name }} 安装构建依赖
         run: |
-          sudo apt-get update # 首先更新主机架构的包列表
-          sudo apt-get install -y libzstd-dev pkg-config # 安装通用依赖
+          # 对于所有架构，首先更新现有的 (默认为 amd64) 包列表并安装通用依赖
+          sudo apt-get update
+          sudo apt-get install -y libzstd-dev pkg-config
           
           if [ "${{ matrix.target.rust_target }}" = "aarch64-unknown-linux-gnu" ]; then
             echo "为 aarch64 配置 APT 以支持多架构..."
             sudo dpkg --add-architecture arm64
             
+            echo "覆盖 /etc/apt/sources.list.d/ubuntu.sources 使其仅用于 amd64..."
+            echo "$AMD64_ONLY_UBUNTU_SOURCES" | sudo tee /etc/apt/sources.list.d/ubuntu.sources > /dev/null
+            echo "--- /etc/apt/sources.list.d/ubuntu.sources (已修改为仅 amd64) 内容 ---"
+            cat /etc/apt/sources.list.d/ubuntu.sources
+
             echo "创建 arm64 特定源文件指向 ports.ubuntu.com..."
-            # 使用定义在 job env 中的 ARM64_UBUNTU_PORTS_SOURCES 环境变量内容来创建文件
             echo "$ARM64_UBUNTU_PORTS_SOURCES" | sudo tee /etc/apt/sources.list.d/arm64-ubuntu-ports.sources > /dev/null
-            
             echo "--- /etc/apt/sources.list.d/arm64-ubuntu-ports.sources 内容 ---"
             cat /etc/apt/sources.list.d/arm64-ubuntu-ports.sources
 
             echo "清理 APT 缓存..."
             sudo apt-get clean
             
-            echo "再次更新包列表 (应包含来自 ports.ubuntu.com 的 arm64 包)..."
-            # 增加 -o APT::Get::Always-Include-Phased-Updates=true 以确保获取所有阶段性更新
+            echo "再次更新包列表 (应正确处理 amd64 和 arm64 源)..."
             sudo apt-get update -o Acquire::Retries=3 -o APT::Get::Always-Include-Phased-Updates=true
             
             echo "正在为 aarch64 安装交叉编译工具和 libssl-dev:arm64..."
+            # 确保安装时也考虑重试
             sudo apt-get install -y -o Acquire::Retries=3 crossbuild-essential-arm64 libssl-dev:arm64
           else
             # 对于 x86_64 (主机) 构建, 确保主机 OpenSSL 开发库已安装
