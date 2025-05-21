@@ -247,13 +247,13 @@ jobs:
             
             echo "覆盖 /etc/apt/sources.list.d/ubuntu.sources 使其仅用于 amd64..."
             echo "$AMD64_ONLY_UBUNTU_SOURCES" | sudo tee /etc/apt/sources.list.d/ubuntu.sources > /dev/null
-            echo "--- /etc/apt/sources.list.d/ubuntu.sources (已修改为仅 amd64) 内容 ---"
-            cat /etc/apt/sources.list.d/ubuntu.sources
+            # echo "--- /etc/apt/sources.list.d/ubuntu.sources (已修改为仅 amd64) 内容 ---" # 调试时可以取消注释
+            # cat /etc/apt/sources.list.d/ubuntu.sources
 
             echo "创建 arm64 特定源文件指向 ports.ubuntu.com..."
             echo "$ARM64_UBUNTU_PORTS_SOURCES" | sudo tee /etc/apt/sources.list.d/arm64-ubuntu-ports.sources > /dev/null
-            echo "--- /etc/apt/sources.list.d/arm64-ubuntu-ports.sources 内容 ---"
-            cat /etc/apt/sources.list.d/arm64-ubuntu-ports.sources
+            # echo "--- /etc/apt/sources.list.d/arm64-ubuntu-ports.sources 内容 ---" # 调试时可以取消注释
+            # cat /etc/apt/sources.list.d/arm64-ubuntu-ports.sources
 
             echo "清理 APT 缓存..."
             sudo apt-get clean
@@ -306,33 +306,39 @@ jobs:
             export AR_aarch64_unknown_linux_gnu=aarch64-linux-gnu-ar
             export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc
             
-            # 设置 PKG_CONFIG_PATH 以便 pkg-config 能找到 aarch64 的 .pc 文件
-            if [ -z "$PKG_CONFIG_PATH" ]; then
-              export PKG_CONFIG_PATH="/usr/lib/aarch64-linux-gnu/pkgconfig"
-            else
-              export PKG_CONFIG_PATH="/usr/lib/aarch64-linux-gnu/pkgconfig:$PKG_CONFIG_PATH"
-            fi
+            # 明确指定 pkg-config 可执行文件和路径
+            export PKG_CONFIG_SYSROOT_DIR=/ # 尝试设置 sysroot
+            export PKG_CONFIG_PATH="/usr/lib/aarch64-linux-gnu/pkgconfig"
+            export PKG_CONFIG="aarch64-linux-gnu-pkg-config"
+            
             echo "  (aarch64) CC: $CC_aarch64_unknown_linux_gnu"
             echo "  (aarch64) AR: $AR_aarch64_unknown_linux_gnu"
             echo "  (aarch64) LINKER: $CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER"
+            echo "  (aarch64) PKG_CONFIG: $(command -v $PKG_CONFIG || echo '未找到')"
             echo "  (aarch64) PKG_CONFIG_PATH: $PKG_CONFIG_PATH"
+            echo "  (aarch64) PKG_CONFIG_SYSROOT_DIR: $PKG_CONFIG_SYSROOT_DIR"
+
+            echo "使用 aarch64-linux-gnu-pkg-config 调试 OpenSSL:"
+            $PKG_CONFIG --debug --exists --print-errors openssl || echo "openssl 未被 $PKG_CONFIG 找到 (错误码: $?)"
+            echo "OpenSSL 版本: $($PKG_CONFIG --modversion openssl || echo '获取版本失败')"
+            echo "OpenSSL 库: $($PKG_CONFIG --libs openssl || echo '获取库失败')"
+            echo "OpenSSL CFLAGS: $($PKG_CONFIG --cflags openssl || echo '获取 CFLAGS 失败')"
+
           else
             echo "为主机 (${{ matrix.target.rust_target }}) 配置环境 (OpenSSL 通常无需特殊设置)..."
-            # 对于 x86_64 或其他主机架构，pkg-config 应该能自动找到主机上安装的 libssl-dev
-            # 无需设置 PKG_CONFIG_PATH 或其他 OpenSSL 特定变量
           fi
           
           echo "执行 cargo build 前的环境变量状态 (相关部分):"
-          echo "  OPENSSL_DIR: '${OPENSSL_DIR:-已取消设置}'" # 使用 BASH 变量替换显示是否已取消设置
+          echo "  OPENSSL_DIR: '${OPENSSL_DIR:-已取消设置}'"
           echo "  OPENSSL_LIB_DIR: '${OPENSSL_LIB_DIR:-已取消设置}'"
           echo "  OPENSSL_INCLUDE_DIR: '${OPENSSL_INCLUDE_DIR:-已取消设置}'"
+          echo "  PKG_CONFIG: '${PKG_CONFIG:-未设置或继承}'"
           echo "  PKG_CONFIG_PATH: '${PKG_CONFIG_PATH:-未设置或继承}'"
+          echo "  PKG_CONFIG_SYSROOT_DIR: '${PKG_CONFIG_SYSROOT_DIR:-未设置或继承}'"
           
           cargo build --release --locked --target ${{ matrix.target.rust_target }}
           echo "为 ${{ matrix.target.name }} 构建完成。"
           
-          # 将编译好的二进制文件复制到工作区根目录并命名
-          # 使用 github.workspace 来确保路径正确
           cp "target/${{ matrix.target.rust_target }}/release/coreos-installer" "${{ github.workspace }}/coreos-installer-${{ matrix.target.arch_suffix }}"
           echo "已将编译产物复制到 ${{ github.workspace }}/coreos-installer-${{ matrix.target.arch_suffix }}"
 
