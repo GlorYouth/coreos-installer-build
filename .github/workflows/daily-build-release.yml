@@ -174,7 +174,7 @@ jobs:
             rust_target: x86_64-unknown-linux-musl
             arch_suffix: x86_64-musl
             c_compiler: musl-gcc 
-            target_cflags: "-I/usr/include/x86_64-linux-gnu" 
+            # target_cflags: "-I/usr/include/x86_64-linux-gnu" # 移除此行，以避免头文件冲突
             target_lib_path: "/usr/lib/x86_64-linux-gnu"
             target_pkgconfig_libdir: "/usr/lib/x86_64-linux-gnu/pkgconfig"
           - name: arm64-linux-musl
@@ -212,12 +212,10 @@ jobs:
 
       - name: Install build dependencies for ${{ matrix.target.name }} 
         run: |
-          set -x # 启用命令执行跟踪，用于调试
-          # 步骤 1: 安装基础的 amd64 构建工具 (在 arm64 case 之前运行，使用默认的 amd64 sources)
+          set -x 
           sudo apt-get update
           sudo apt-get install -y musl-tools pkg-config libssl-dev libzstd-dev 
           
-          # 步骤 2: 如果是 arm64 target，则配置多架构 APT 环境
           if [ "${{ matrix.target.rust_target }}" = "aarch64-unknown-linux-musl" ]; then
             echo "为 aarch64-musl 配置 APT 以支持多架构依赖..."
             sudo dpkg --add-architecture arm64
@@ -262,7 +260,7 @@ jobs:
             fi
             echo "aarch64 OpenSSL 和 Zstd 依赖已安装。"
 
-          else # x86_64-unknown-linux-musl (amd64 host)
+          else 
             echo "为主机 (x86_64) musl 构建，依赖已在前面通过 apt-get install 安装。"
             
             echo "验证主机 OpenSSL .pc 和 .a 文件..."
@@ -294,7 +292,7 @@ jobs:
           OPENSSL_STATIC: "true" 
           ZSTD_STATIC: "true"
         run: |
-          set -x # 启用命令执行跟踪，用于调试
+          set -x 
           echo "开始为 ${{ matrix.target.name }} (Rust target: ${{ matrix.target.rust_target }}) 构建 coreos-installer..."
           cd "${{ steps.download_source.outputs.coreos_installer_dir }}"
           
@@ -313,19 +311,24 @@ jobs:
             export CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER="${{ matrix.target.c_compiler }}"
             export OPENSSL_LIB_DIR="${{ matrix.target.target_lib_path }}" 
             export ZSTD_LIB_DIR="${{ matrix.target.target_lib_path }}"    
-            export CFLAGS_x86_64_unknown_linux_musl="${{ matrix.target.target_cflags }}" 
+            # 不再导出 CFLAGS_x86_64_unknown_linux_musl，以避免污染其他 -sys crate 的编译环境
+            # export CFLAGS_x86_64_unknown_linux_musl="${{ matrix.target.target_cflags }}" 
+            
             HOST_PKG_CONFIG=$(command -v pkg-config)
             if [ -z "$HOST_PKG_CONFIG" ]; then echo "错误: 主机 pkg-config 未找到。" >&2; exit 1; fi
             export PKG_CONFIG="$HOST_PKG_CONFIG"
             export PKG_CONFIG_LIBDIR="${{ matrix.target.target_pkgconfig_libdir }}" 
+
+            # RUSTFLAGS 可能仍然需要指向本地库路径，如果 pkg-config 没有完全覆盖
             export RUSTFLAGS="-Lnative=${{ matrix.target.target_lib_path }}"
             export LIBRARY_PATH="${{ matrix.target.target_lib_path }}:${LIBRARY_PATH:-}"
+
             echo "  (x86_64-musl) CC: $CC, CXX: $CXX, LINKER: $CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER"
             echo "  (x86_64-musl) OPENSSL_LIB_DIR: $OPENSSL_LIB_DIR, OPENSSL_INCLUDE_DIR: $OPENSSL_INCLUDE_DIR"
             echo "  (x86_64-musl) ZSTD_LIB_DIR: $ZSTD_LIB_DIR, ZSTD_INCLUDE_DIR: $ZSTD_INCLUDE_DIR"
             echo "  (x86_64-musl) PKG_CONFIG: $PKG_CONFIG, PKG_CONFIG_LIBDIR: $PKG_CONFIG_LIBDIR"
             echo "  (x86_64-musl) RUSTFLAGS: $RUSTFLAGS, LIBRARY_PATH: $LIBRARY_PATH"
-            echo "  (x86_64-musl) CFLAGS_x86_64_unknown_linux_musl: $CFLAGS_x86_64_unknown_linux_musl"
+            # echo "  (x86_64-musl) CFLAGS_x86_64_unknown_linux_musl: (已移除)"
             $PKG_CONFIG --static --print-errors --cflags --libs openssl || echo "  pkg-config openssl (static) 失败或未找到."
             $PKG_CONFIG --static --print-errors --cflags --libs libzstd || echo "  pkg-config libzstd (static) 失败或未找到."
 
