@@ -113,7 +113,10 @@ jobs:
           echo "强制发布输入: $FORCE_RELEASE_INPUT"
           echo "CoreOS/coreos-installer 最新官方 Release 标签: $CURRENT_OFFICIAL_TAG"
 
-          if [ "$FORCE_RELEASE_INPUT" = "true" ]; then
+          if [ "$EVENT_NAME" = "push" ]; then
+              NEEDS_RELEASE="true"
+              echo "工作流由 push 事件触发。需要发布新版本 (跳过版本号比较)。"
+          elif [ "$FORCE_RELEASE_INPUT" = "true" ]; then
               NEEDS_RELEASE="true"
               echo "强制发布输入为 true。需要发布新版本 (跳过版本号比较)。"
           elif [ -z "$PREVIOUS_OFFICIAL_EQUIVALENT_TAG" ]; then
