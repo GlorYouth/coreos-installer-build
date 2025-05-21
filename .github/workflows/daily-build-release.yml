@@ -433,24 +433,38 @@ jobs:
         run: |
           mkdir -p release_assets # 创建用于存放最终 Release 资产的目录
           
-          echo "准备 x86_64 资产..."
-          # 复制 x86_64 资产并重命名
-          # 路径结构是 ./downloaded_release_assets/<artifact-name>/<file-name>
+          echo "准备 x86_64 版本化资产..."
           cp "./downloaded_release_assets/coreos-installer-x86_64/coreos-installer-x86_64" \
              "release_assets/coreos-installer-${{ env.VERSION_PREFIX }}-x86_64-unknown-linux-gnu"
           cp "./downloaded_release_assets/coreos-installer-x86_64/coreos-installer-x86_64.sha256" \
              "release_assets/coreos-installer-${{ env.VERSION_PREFIX }}-x86_64-unknown-linux-gnu.sha256"
 
-          echo "准备 aarch64 资产..."
-          # 复制 aarch64 资产并重命名
+          echo "准备 aarch64 版本化资产..."
           cp "./downloaded_release_assets/coreos-installer-aarch64/coreos-installer-aarch64" \
              "release_assets/coreos-installer-${{ env.VERSION_PREFIX }}-aarch64-unknown-linux-gnu"
           cp "./downloaded_release_assets/coreos-installer-aarch64/coreos-installer-aarch64.sha256" \
              "release_assets/coreos-installer-${{ env.VERSION_PREFIX }}-aarch64-unknown-linux-gnu.sha256"
+
+          echo "准备 x86_64 固定名称资产 (latest)..."
+          cp "./downloaded_release_assets/coreos-installer-x86_64/coreos-installer-x86_64" \
+             "release_assets/coreos-installer-x86_64-latest"
+          cp "./downloaded_release_assets/coreos-installer-x86_64/coreos-installer-x86_64.sha256" \
+             "release_assets/coreos-installer-x86_64-latest.sha256"
+
+          echo "准备 aarch64 固定名称资产 (latest)..."
+          cp "./downloaded_release_assets/coreos-installer-aarch64/coreos-installer-aarch64" \
+             "release_assets/coreos-installer-aarch64-latest"
+          cp "./downloaded_release_assets/coreos-installer-aarch64/coreos-installer-aarch64.sha256" \
+             "release_assets/coreos-installer-aarch64-latest.sha256"
           
           echo "正在生成总的 SHA256SUMS 文件..."
-          # 进入 release_assets 目录生成 SHA256SUMS，使其包含相对路径
-          (cd release_assets && sha256sum coreos-installer-*) > release_assets/SHA256SUMS
+          # 明确列出要包含在 SHA256SUMS 中的二进制文件
+          (cd release_assets && sha256sum \
+            coreos-installer-${{ env.VERSION_PREFIX }}-x86_64-unknown-linux-gnu \
+            coreos-installer-${{ env.VERSION_PREFIX }}-aarch64-unknown-linux-gnu \
+            coreos-installer-x86_64-latest \
+            coreos-installer-aarch64-latest \
+          ) > release_assets/SHA256SUMS
           
           echo "Release 资产准备完成。目录 'release_assets' 内容:"
           ls -l release_assets/
@@ -474,10 +488,18 @@ jobs:
             **触发本次构建的提交 (本仓库):** ${{ github.sha }}
 
             **包含的资产:**
+            *版本化资产:*
             - `coreos-installer-${{ env.VERSION_PREFIX }}-x86_64-unknown-linux-gnu`
             - `coreos-installer-${{ env.VERSION_PREFIX }}-x86_64-unknown-linux-gnu.sha256`
             - `coreos-installer-${{ env.VERSION_PREFIX }}-aarch64-unknown-linux-gnu`
             - `coreos-installer-${{ env.VERSION_PREFIX }}-aarch64-unknown-linux-gnu.sha256`
+
+            *固定名称最新资产 (指向此 Release 中的对应架构文件):*
+            - `coreos-installer-x86_64-latest`
+            - `coreos-installer-x86_64-latest.sha256`
+            - `coreos-installer-aarch64-latest`
+            - `coreos-installer-aarch64-latest.sha256`
+            
             - `SHA256SUMS` (包含以上所有二进制文件的校验和)
 
             *注意: 此构建基于官方发布的源码。请在使用前验证校验和。*
