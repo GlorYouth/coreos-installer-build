@@ -5,6 +5,12 @@ on:
     - cron: '0 0 * * *' # 每天 UTC 时间 00:00 (午夜) 运行
   workflow_dispatch:
     # 允许手动触发此工作流
+    inputs:
+      force_release:
+        description: 'Force a new release even if SHA256 has not changed'
+        required: false
+        default: false
+        type: boolean
 
 jobs:
   # 步骤 1: 获取最新 Release 信息并决定是否需要发布
@@ -40,7 +46,7 @@ jobs:
 
           # 提取标签名和zipball URL
           TAG_NAME=$(echo "$RELEASE_INFO" | jq -r .tag_name)
-          ZIPBALL_URL=$(echo "$RELEASE_INFO" | jq -r .zipball_url)
+          ZIPBALL_URL=$(echo "$RELEASE_INFO" | jq -r .zipball_URL)
 
           # 提取版本号前缀 (例如，v0.20.0 -> 0.20.0)
           VERSION_PREFIX=$(echo "$TAG_NAME" | sed 's/^v//')
@@ -137,7 +143,12 @@ jobs:
           CURRENT_SHA="${{ steps.date_step.outputs.current_sha256 }}" # 修正引用
           NEEDS_RELEASE="false"
 
-          if [ -z "$PREVIOUS_SHA" ]; then # 第一次运行或者 artifact 已过期
+          # 检查是否通过 workflow_dispatch 输入强制发布
+          # 如果 force_release 为 true，则直接设置为需要发布
+          if [ "${{ github.event.inputs.force_release }}" = "true" ]; then
+              NEEDS_RELEASE="true"
+              echo "Force release input is true. A new release is needed (bypassing SHA256 comparison)."
+          elif [ -z "$PREVIOUS_SHA" ]; then # 第一次运行或者 artifact 已过期
               NEEDS_RELEASE="true"
               echo "No previous SHA256 found (first run or artifact expired). A release is needed."
           elif [ "$CURRENT_SHA" != "$PREVIOUS_SHA" ]; then
