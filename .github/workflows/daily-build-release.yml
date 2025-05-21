@@ -265,6 +265,21 @@ jobs:
           if [ "${{ matrix.target.rust_target }}" = "aarch64-unknown-linux-gnu" ]; then
             # 为 aarch64 交叉编译安装 OpenSSL 开发库
             sudo dpkg --add-architecture arm64
+            
+            # 获取当前 Ubuntu 发行版代号
+            UBUNTU_CODENAME=$(lsb_release -cs)
+            echo "Detected Ubuntu Codename: $UBUNTU_CODENAME"
+
+            # 修改 sources.list 以支持多架构
+            # 备份原始 sources.list
+            sudo cp /etc/apt/sources.list /etc/apt/sources.list.bak
+            # 清空并添加支持 arm64 的源
+            echo "" | sudo tee /etc/apt/sources.list
+            echo "deb [arch=amd64,arm64] http://archive.ubuntu.com/ubuntu/ ${UBUNTU_CODENAME} main restricted universe multiverse" | sudo tee -a /etc/apt/sources.list
+            echo "deb [arch=amd64,arm64] http://archive.ubuntu.com/ubuntu/ ${UBUNTU_CODENAME}-updates main restricted universe multiverse" | sudo tee -a /etc/apt/sources.list
+            echo "deb [arch=amd64,arm64] http://archive.ubuntu.com/ubuntu/ ${UBUNTU_CODENAME}-backports main restricted universe multiverse" | sudo tee -a /etc/apt/sources.list
+            echo "deb [arch=amd64,arm64] http://security.ubuntu.com/ubuntu/ ${UBUNTU_CODENAME}-security main restricted universe multiverse" | sudo tee -a /etc/apt/sources.list
+            
             sudo apt-get update
             sudo apt-get install -y libssl-dev:arm64 gcc-aarch64-linux-gnu
           fi
