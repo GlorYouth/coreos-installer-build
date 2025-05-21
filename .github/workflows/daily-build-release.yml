@@ -35,7 +35,8 @@ jobs:
       - name: Calculate current coreos-installer SHA256
         id: calculate_sha
         run: |
-          CURRENT_SHA256=$(sha256sum coreos-installer | awk '{print $1}')
+          # 路径指向当前目录的 coreos-installer
+          CURRENT_SHA256=$(sha256sum ./coreos-installer | awk '{print $1}')
           echo "current_sha256=$CURRENT_SHA256" >> "$GITHUB_OUTPUT"
           echo "Current coreos-installer SHA256: $CURRENT_SHA256"
 
@@ -78,13 +79,13 @@ jobs:
           echo "needs_release=$NEEDS_RELEASE" >> "$GITHUB_OUTPUT"
 
       - name: Prepare release assets
-        if: ${{ steps.compare_sha.outputs.needs_release == 'true' }} # 仅当需要 Release 时才准备资产
+        if: ${{ steps.compare_sha.outputs.needs_release == 'true' }}
         run: |
           mkdir -p release_assets
           ASSET_NAME="coreos-installer-$(date +%Y%m%d)-x86_64-unknown-linux-gnu"
-          cp target/release/coreos-installer release_assets/$ASSET_NAME
+          # 复制当前目录的 coreos-installer
+          cp ./coreos-installer release_assets/$ASSET_NAME
           sha256sum release_assets/* > release_assets/SHA256SUMS
-          # 将当前的SHA256保存到文件中，用于下一次运行的对比
           echo "${{ steps.calculate_sha.outputs.current_sha256 }}" > .github/coreos-installer_sha256.txt
 
       - name: Create Release
