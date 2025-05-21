@@ -3,6 +3,9 @@ name: Daily coreos-installer Official Release Build and Publish
 on:
   schedule:
     - cron: '0 0 * * *' # 每天 UTC 时间 00:00 (午夜) 运行
+  push:
+    branches:
+      - main # 每次推送到 main 分支时自动运行
   workflow_dispatch:
     # 允许手动触发此工作流
     inputs:
@@ -22,8 +25,7 @@ jobs:
       release_version_prefix: ${{ steps.get_release.outputs.version_prefix }}
       date_tag: ${{ steps.date_step.outputs.date_tag }}
       date_name: ${{ steps.date_step.outputs.date_name }}
-      needs_release: ${{ steps.compare_sha.outputs.needs_release }}
-      # 导出 COREOS_INSTALLER_DIR 作为 job output，以便 build-multi-arch job 访问
+      needs_release: ${{ steps.compare_sha.outputs.needs_release }} # 仍然输出 needs_release
       coreos_installer_dir_path: ${{ steps.download_source.outputs.coreos_installer_dir }}
     permissions:
       contents: write # 授予写入权限以创建 ./.github/coreos-installer_sha256.txt
@@ -179,9 +181,17 @@ jobs:
           CURRENT_SHA="${{ steps.date_step.outputs.current_sha256 }}" # 修正引用
           NEEDS_RELEASE="false"
 
-          # 检查是否通过 workflow_dispatch 输入强制发布
-          # 如果 force_release 为 true，则直接设置为需要发布
-          if [ "${{ github.event.inputs.force_release }}" = "true" ]; then
+          # 检查触发事件类型和 force_release 输入
+          EVENT_NAME="${{ github.event_name }}"
+          FORCE_RELEASE_INPUT="${{ github.event.inputs.force_release }}"
+
+          echo "Event name: $EVENT_NAME"
+          echo "Force release input: $FORCE_RELEASE_INPUT"
+
+          if [ "$EVENT_NAME" = "push" ]; then
+              NEEDS_RELEASE="true"
+              echo "Workflow triggered by push event. A new release is needed (bypassing SHA256 comparison)."
+          elif [ "$FORCE_RELEASE_INPUT" = "true" ]; then
               NEEDS_RELEASE="true"
               echo "Force release input is true. A new release is needed (bypassing SHA256 comparison)."
           elif [ -z "$PREVIOUS_SHA" ]; then # 第一次运行或者 artifact 已过期
@@ -263,25 +273,8 @@ jobs:
           sudo apt-get install -y libzstd-dev
           
           if [ "${{ matrix.target.rust_target }}" = "aarch64-unknown-linux-gnu" ]; then
-            # 为 aarch64 交叉编译安装 OpenSSL 开发库
-            sudo dpkg --add-architecture arm64
-            
-            # 获取当前 Ubuntu 发行版代号
-            UBUNTU_CODENAME=$(lsb_release -cs)
-            echo "Detected Ubuntu Codename: $UBUNTU_CODENAME"
-
-            # 修改 sources.list 以支持多架构
-            # 备份原始 sources.list
-            sudo cp /etc/apt/sources.list /etc/apt/sources.list.bak
-            # 清空并添加支持 arm64 的源
-            echo "" | sudo tee /etc/apt/sources.list
-            echo "deb [arch=amd64,arm64] http://archive.ubuntu.com/ubuntu/ ${UBUNTU_CODENAME} main restricted universe multiverse" | sudo tee -a /etc/apt/sources.list
-            echo "deb [arch=amd64,arm64] http://archive.ubuntu.com/ubuntu/ ${UBUNTU_CODENAME}-updates main restricted universe multiverse" | sudo tee -a /etc/apt/sources.list
-            echo "deb [arch=amd64,arm64] http://archive.ubuntu.com/ubuntu/ ${UBUNTU_CODENAME}-backports main restricted universe multiverse" | sudo tee -a /etc/apt/sources.list
-            echo "deb [arch=amd64,arm64] http://security.ubuntu.com/ubuntu/ ${UBUNTU_CODENAME}-security main restricted universe multiverse" | sudo tee -a /etc/apt/sources.list
-            
-            sudo apt-get update
-            sudo apt-get install -y libssl-dev:arm64 gcc-aarch64-linux-gnu
+            # 安装交叉编译工具和依赖，crossbuild-essential-arm64 会处理多架构设置并拉取 libssl-dev:arm64
+            sudo apt-get install -y crossbuild-essential-arm64
           fi
 
       - name: Setup Rust toolchain for ${{ matrix.target.name }}
@@ -300,7 +293,7 @@ jobs:
           CARGO_PROFILE_RELEASE_PANIC: "abort"
           CARGO_PROFILE_RELEASE_STRIP: "symbols"
           # 针对 aarch64 交叉编译设置 PKG_CONFIG_PATH，帮助 openssl-sys 找到库
-          # 注意：这里假设 libssl-dev:arm64 将库安装到 /usr/lib/aarch64-linux-gnu/pkgconfig
+          # 注意：这里假设 crossbuild-essential-arm64 将库安装到 /usr/lib/aarch64-linux-gnu/pkgconfig
           # 如果实际路径不同，可能需要调整
           PKG_CONFIG_PATH: /usr/lib/aarch64-linux-gnu/pkgconfig:${{ env.PKG_CONFIG_PATH }}
         run: |
