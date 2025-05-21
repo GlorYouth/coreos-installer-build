@@ -216,11 +216,13 @@ jobs:
 
       - name: Install build dependencies for ${{ matrix.target.name }} # 为 ${{ matrix.target.name }} 安装构建依赖
         run: |
-          sudo apt-get update
-          sudo apt-get install -y libzstd-dev pkg-config # 确保 pkg-config 和通用依赖已安装
+          sudo apt-get update # 首先更新主机架构的包列表
+          sudo apt-get install -y libzstd-dev pkg-config # 安装通用依赖
           
           if [ "${{ matrix.target.rust_target }}" = "aarch64-unknown-linux-gnu" ]; then
-            # 安装交叉编译工具和针对 arm64 的 OpenSSL 开发库
+            echo "为 aarch64 添加架构并更新包列表..."
+            sudo dpkg --add-architecture arm64
+            sudo apt-get update # 关键：在添加架构后再次更新，以获取 arm64 包列表
             echo "正在为 aarch64 安装交叉编译工具和 libssl-dev:arm64..."
             sudo apt-get install -y crossbuild-essential-arm64 libssl-dev:arm64
           else
