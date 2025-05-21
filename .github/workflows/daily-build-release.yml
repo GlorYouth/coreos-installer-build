@@ -33,12 +33,20 @@ jobs:
         # 二进制文件在 /home/runner/.cargo/bin/coreos-installer
         run: cargo install coreos-installer && cp /home/runner/.cargo/bin/coreos-installer ./coreos-installer
 
-      - name: Calculate current coreos-installer SHA256 and save to file
-        id: calculate_sha
+      - name: Get Current Date and Calculate SHA256
+        id: date_and_sha # 为此步骤定义一个ID
         run: |
+          # 获取当前日期并设置为输出变量
+          CURRENT_DATE_TAG=$(date +%Y%m%d)
+          CURRENT_DATE_NAME=$(date +%Y-%m-%d)
+          echo "date_tag=$CURRENT_DATE_TAG" >> "$GITHUB_OUTPUT" # 设置为输出变量
+          echo "date_name=$CURRENT_DATE_NAME" >> "$GITHUB_OUTPUT" # 设置为输出变量
+
+          # 计算当前 coreos-installer 的 SHA256
           CURRENT_SHA256=$(sha256sum coreos-installer | awk '{print $1}')
           echo "current_sha256=$CURRENT_SHA256" >> "$GITHUB_OUTPUT"
           echo "Current coreos-installer SHA256: $CURRENT_SHA256"
+
           # 无论是否 Release，都将当前的 SHA256 保存到文件中
           mkdir -p ./.github/ # 确保目录存在
           echo "$CURRENT_SHA256" > ./.github/coreos-installer_sha256.txt
@@ -47,19 +55,15 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: previous-sha256
-          path: ./.github/
+          path: ./downloaded_artifacts/ # 下载到临时目录，避免覆盖当前生成的 .github/coreos-installer_sha256.txt
         continue-on-error: true # 第一次运行或没有 artifact 时，允许失败
 
       - name: Check for previous SHA256
         id: check_previous_sha
         run: |
-          PREVIOUS_SHA_FILE="./.github/coreos-installer_sha256.txt"
+          # Artifact 会被解压到 ./downloaded_artifacts/previous-sha256/coreos-installer_sha256.txt
+          DOWNLOADED_PREVIOUS_SHA_FILE="./downloaded_artifacts/previous-sha256/coreos-installer_sha256.txt"
           PREVIOUS_SHA256=""
-
-          # 这里下载的artifact会覆盖当前生成的coreos-installer_sha256.txt
-          # 所以需要判断是否是第一次运行或者artifact是否已过期
-          # 最好的方式是把下载的artifact保存到另一个名字的文件中
-          DOWNLOADED_PREVIOUS_SHA_FILE="./.github/downloaded_previous_sha256.txt"
 
           if [ -f "$DOWNLOADED_PREVIOUS_SHA_FILE" ]; then
             PREVIOUS_SHA256=$(cat "$DOWNLOADED_PREVIOUS_SHA_FILE")
@@ -73,7 +77,8 @@ jobs:
       - name: Compare SHA256 and set release flag
         id: compare_sha
         run: |
-          CURRENT_SHA="${{ steps.calculate_sha.outputs.current_sha256 }}"
+          # 访问当前 SHA256 (来自 date_and_sha 步骤的输出)
+          CURRENT_SHA="${{ steps.date_and_sha.outputs.current_sha256 }}"
           PREVIOUS_SHA="${{ steps.check_previous_sha.outputs.previous_sha256 }}"
           NEEDS_RELEASE="false"
 
@@ -93,37 +98,34 @@ jobs:
         if: ${{ success() && steps.compare_sha.outputs.needs_release == 'true' }} # 仅当构建成功且需要 Release 时才准备资产
         run: |
           mkdir -p release_assets
-          ASSET_NAME="coreos-installer-$(date +%Y%m%d)-x86_64-unknown-linux-gnu"
-          cp coreos-installer release_assets/$ASSET_NAME
+          # 使用步骤输出中存储的日期
+          ASSET_NAME="coreos-installer-${{ steps.date_and_sha.outputs.date_tag }}-x86_64-unknown-linux-gnu"
+          cp coreos-installer "release_assets/${ASSET_NAME}"
           sha256sum release_assets/* > release_assets/SHA256SUMS
-          # 注意：coreos-installer_sha256.txt 已经在 calculate_sha 步骤中创建了
-          # 这里不再需要重复创建，但确保它在 release_assets 目录中以便上传（如果需要作为发布资产的话）
-          # 如果你只希望它作为artifact上传，而不作为release资产，这里就不需要复制
-          # cp ./.github/coreos-installer_sha256.txt release_assets/coreos-installer_sha256.txt # 如果需要作为发布资产
+          # 如果 coreos-installer_sha256.txt 也要作为 release 资产，取消注释下一行
+          # cp ./.github/coreos-installer_sha256.txt release_assets/coreos-installer_sha256.txt
 
       - name: Create Release
         uses: softprops/action-gh-release@v1
         if: ${{ success() && steps.compare_sha.outputs.needs_release == 'true' }} # 仅当构建成功且需要 Release 时才创建 Release
         with:
-          tag_name: nightly-$(date +%Y%m%d)
-          name: coreos-installer Nightly Build $(date +%Y-%m-%d)
+          # 使用步骤输出中存储的日期
+          tag_name: nightly-${{ steps.date_and_sha.outputs.date_tag }}
+          name: coreos-installer Nightly Build ${{ steps.date_and_sha.outputs.date_name }}
           body: |
             ### Daily Build of coreos-installer
 
             This is an automated nightly build of `coreos-installer` from the `main` branch.
 
-            **Build Date:** $(date +%Y-%m-%d)
+            **Build Date:** ${{ steps.date_and_sha.outputs.date_name }}
             **Commit:** ${{ github.sha }}
 
             **Assets:**
-            - `coreos-installer-$(date +%Y%m%d)-x86_64-unknown-linux-gnu`
+            - `coreos-installer-${{ steps.date_and_sha.outputs.date_tag }}-x86_64-unknown-linux-gnu`
             - `SHA256SUMS`
 
             *Note: This is a nightly build and may contain unstable features or bugs. Use at your own risk.*
-          files: |
-            release_assets/*
-            # 如果 coreos-installer_sha256.txt 也要作为 release 资产，取消注释上一行的 cp 命令
-            # 否则它只作为 artifact 上传，供下次工作流使用
+          files: release_assets/* # 移除了注释行，这会解决 'Pattern does not match any files' 警告
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
