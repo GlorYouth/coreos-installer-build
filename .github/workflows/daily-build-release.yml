@@ -1,5 +1,7 @@
+# 工作流名称
 name: Daily coreos-installer Official Release Build and Publish
 
+# 工作流触发条件
 on:
   schedule:
     - cron: '0 0 * * *' # 每天 UTC 时间 00:00 (午夜) 运行
@@ -10,7 +12,7 @@ on:
     # 允许手动触发此工作流
     inputs:
       force_release:
-        description: 'Force a new release even if SHA256 has not changed'
+        description: '强制发布新版本，即使版本号没有变化 (Force a new release even if version has not changed)'
         required: false
         default: false
         type: boolean
@@ -20,22 +22,21 @@ jobs:
   get-latest-release-info:
     runs-on: ubuntu-latest
     outputs:
-      release_tag: ${{ steps.get_release.outputs.tag_name }}
-      release_url: ${{ steps.get_release.outputs.zipball_url }}
-      release_version_prefix: ${{ steps.get_release.outputs.version_prefix }}
-      date_tag: ${{ steps.date_step.outputs.date_tag }}
-      date_name: ${{ steps.date_step.outputs.date_name }}
-      needs_release: ${{ steps.compare_sha.outputs.needs_release }} # 仍然输出 needs_release
-      coreos_installer_dir_path: ${{ steps.download_source.outputs.coreos_installer_dir }}
+      release_tag: ${{ steps.get_release.outputs.tag_name }}               # 输出最新的官方 Release 标签 (例如 v0.20.0)
+      release_url: ${{ steps.get_release.outputs.zipball_url }}           # 输出最新官方 Release 的源码下载 URL
+      release_version_prefix: ${{ steps.get_release.outputs.version_prefix }} # 输出版本前缀 (例如 0.20.0)
+      date_tag: ${{ steps.get_date.outputs.date_tag }}                     # 输出当前日期标签 (例如 20231026)
+      date_name: ${{ steps.get_date.outputs.date_name }}                   # 输出当前日期名称 (例如 2023-10-26)
+      needs_release: ${{ steps.compare_versions.outputs.needs_release }}   # 输出是否需要发布新版本的标志 (true/false)
     permissions:
-      contents: write # 授予写入权限以创建 ./.github/coreos-installer_sha256.txt
-      actions: write # 授予写入权限以上传/下载 artifacts
+      contents: write # 授予写入权限以创建 ./.github/coreos-installer_current_version.txt
+      actions: write  # 授予写入权限以上传/下载 artifacts
 
     steps:
-      - name: Checkout your repository
+      - name: Checkout your repository # 检出当前仓库代码
         uses: actions/checkout@v4
 
-      - name: Get latest coreos-installer official release info
+      - name: Get latest coreos-installer official release info # 获取 coreos-installer 官方最新 Release 信息
         id: get_release
         run: |
           # 使用 GitHub API 获取 coreos-installer 官方仓库的最新 Release
@@ -47,176 +48,121 @@ jobs:
           
           # 检查 RELEASE_INFO 是否为空
           if [ -z "$RELEASE_INFO" ]; then
-            echo "Error: Failed to fetch latest release info from GitHub API. RELEASE_INFO is empty."
+            echo "错误：未能从 GitHub API 获取最新的 Release 信息。RELEASE_INFO 为空。"
             exit 1
           fi
 
           # 提取标签名和zipball URL
           TAG_NAME=$(echo "$RELEASE_INFO" | jq -r .tag_name)
           ZIPBALL_URL=$(echo "$RELEASE_INFO" | jq -r .zipball_url)
-          VERSION_PREFIX=$(echo "$TAG_NAME" | sed 's/^v//')
+          VERSION_PREFIX=$(echo "$TAG_NAME" | sed 's/^v//') # 移除标签名前的 'v'
 
           # 检查提取的值是否为空/null
           if [ -z "$TAG_NAME" ] || [ "$TAG_NAME" = "null" ]; then
-            echo "Error: Could not extract tag_name from release info. Raw RELEASE_INFO:"
+            echo "错误：无法从 Release 信息中提取 tag_name。原始 RELEASE_INFO："
             echo "$RELEASE_INFO"
             exit 1
           fi
           if [ -z "$ZIPBALL_URL" ] || [ "$ZIPBALL_URL" = "null" ]; then
-            echo "Error: Could not extract zipball_url from release info. Raw RELEASE_INFO:"
+            echo "错误：无法从 Release 信息中提取 zipball_url。原始 RELEASE_INFO："
             echo "$RELEASE_INFO"
             exit 1
           fi
           if [ -z "$VERSION_PREFIX" ] || [ "$VERSION_PREFIX" = "null" ]; then
-            echo "Error: Could not determine version_prefix from tag_name: $TAG_NAME"
+            echo "错误：无法从 tag_name ($TAG_NAME) 中确定 version_prefix。"
             exit 1
           fi
 
-          echo "Latest coreos-installer release tag: $TAG_NAME"
-          echo "Latest coreos-installer zipball URL: $ZIPBALL_URL"
-          echo "Version prefix for assets: $VERSION_PREFIX"
+          echo "最新的 coreos-installer Release 标签: $TAG_NAME"
+          echo "最新的 coreos-installer zipball URL: $ZIPBALL_URL"
+          echo "用于资产的版本前缀: $VERSION_PREFIX"
 
           # 设置为输出变量
           echo "tag_name=$TAG_NAME" >> "$GITHUB_OUTPUT"
           echo "zipball_url=$ZIPBALL_URL" >> "$GITHUB_OUTPUT"
           echo "version_prefix=$VERSION_PREFIX" >> "$GITHUB_OUTPUT"
 
-      - name: Download coreos-installer official release source
-        id: download_source # 为此步骤添加ID
-        run: |
-          # 从上一步获取的URL下载源码压缩包
-          curl -L "${{ steps.get_release.outputs.zipball_url }}" -o coreos-installer-source.zip
-          
-          # 检查下载是否成功（简单检查文件是否存在）
-          if [ ! -f coreos-installer-source.zip ]; then
-            echo "Error: Failed to download coreos-installer source.zip. URL used: ${{ steps.get_release.outputs.zipball_url }}"
-            exit 1
-          fi
-
-          unzip coreos-installer-source.zip -d coreos-installer-source
-          
-          # 找到实际的源码目录
-          # 修复: 使用 ls -d 查找唯一的子目录，因为 find 的模式可能不匹配
-          COREOS_INSTALLER_DIR=$(ls -d coreos-installer-source/*/)
-          
-          # 检查 COREOS_INSTALLER_DIR 是否找到
-          if [ -z "$COREOS_INSTALLER_DIR" ]; then
-            echo "Error: Could not find the coreos-installer source directory after unzipping."
-            echo "Content of coreos-installer-source:"
-            ls -F coreos-installer-source/ || true # 列出内容，如果目录不存在则忽略错误
-            exit 1
-          fi
-
-          echo "COREOS_INSTALLER_DIR=$COREOS_INSTALLER_DIR" # 打印调试信息
-          echo "coreos_installer_dir=$COREOS_INSTALLER_DIR" >> "$GITHUB_OUTPUT" # 设置为步骤输出变量
-          ls -F "$COREOS_INSTALLER_DIR" # 列出内容以确认
-
-      - name: Install x86_64 build dependencies (for SHA256 calc on host)
-        # 仅用于确保 coreos-installer 能在当前机器上构建并计算SHA256
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libzstd-dev
-
-      - name: Setup Rust toolchain (for x86_64 host build)
-        uses: actions-rs/toolchain@v1
-        with:
-          toolchain: stable
-          profile: minimal
-          override: true
-          target: x86_64-unknown-linux-gnu # 明确指定宿主架构
-
-      - name: Build coreos-installer for SHA256 comparison (x86_64)
-        env: # 设置环境变量，影响 cargo build --release
-          CARGO_PROFILE_RELEASE_OPT_LEVEL: "z"
-          CARGO_PROFILE_RELEASE_LTO: "fat"
-          CARGO_PROFILE_RELEASE_CODEGEN_UNITS: "1"
-          CARGO_PROFILE_RELEASE_PANIC: "abort"
-          CARGO_PROFILE_RELEASE_STRIP: "symbols"
-        run: |
-          # 进入源码目录并使用 cargo build
-          cd "${{ steps.download_source.outputs.coreos_installer_dir }}" # 使用步骤输出
-          cargo build --release --locked
-          # 将编译好的二进制文件复制到工作区根目录，以便计算 SHA256 和上传
-          cp target/release/coreos-installer "${{ github.workspace }}/coreos-installer-x86_64"
-
-      - name: Get Current Date and Calculate SHA256
-        id: date_step # 为此步骤定义一个ID
+      - name: Get Current Date # 获取当前日期
+        id: get_date
         run: |
           # 获取当前日期并设置为输出变量
           CURRENT_DATE_TAG=$(date +%Y%m%d)
           CURRENT_DATE_NAME=$(date +%Y-%m-%d)
           echo "date_tag=$CURRENT_DATE_TAG" >> "$GITHUB_OUTPUT"
           echo "date_name=$CURRENT_DATE_NAME" >> "$GITHUB_OUTPUT"
+          echo "当前日期标签: $CURRENT_DATE_TAG"
+          echo "当前日期名称: $CURRENT_DATE_NAME"
 
-          # 计算当前 coreos-installer 的 SHA256 (基于 x86_64 构建，用于通用比较)
-          # 注意这里 SHA256 计算的是我们刚刚复制出来的文件
-          CURRENT_SHA256=$(sha256sum coreos-installer-x86_64 | awk '{print $1}')
-          echo "current_sha256=$CURRENT_SHA256" >> "$GITHUB_OUTPUT"
-          echo "Current coreos-installer SHA256 (x86_64): $CURRENT_SHA256"
-
-          # 无论是否 Release，都将当前的 SHA256 保存到文件中，用于后续上传artifact
+      - name: Prepare current version file # 准备当前版本文件
+        id: prepare_current_version
+        run: |
+          # 将当前的官方版本号保存到文件中，用于后续上传 artifact
           mkdir -p ./.github/ # 确保目录存在
-          echo "$CURRENT_SHA256" > ./.github/coreos-installer_sha256.txt
+          echo "${{ steps.get_release.outputs.tag_name }}" > ./.github/coreos-installer_current_version.txt
+          echo "已将当前版本 ${{ steps.get_release.outputs.tag_name }} 写入 ./.github/coreos-installer_current_version.txt"
 
-      - name: Download previous SHA256 artifact
+      - name: Download previous version artifact # 下载上一次记录的版本号 artifact
         uses: actions/download-artifact@v4
         with:
-          name: previous-sha256
-          path: ./downloaded_artifacts/
-        continue-on-error: true
+          name: previous-coreos-version # artifact 名称
+          path: ./downloaded_artifacts/ # 下载路径
+        continue-on-error: true # 如果 artifact 不存在 (例如首次运行)，则继续执行
 
-      - name: Check for previous SHA256
-        id: compare_sha # 改变ID以匹配outputs引用
+      - name: Compare with Previous Version # 与上一个记录的版本进行比较
+        id: compare_versions
         run: |
-          DOWNLOADED_PREVIOUS_SHA_FILE="./downloaded_artifacts/previous-sha256/coreos-installer_sha256.txt"
-          PREVIOUS_SHA256=""
+          DOWNLOADED_PREVIOUS_VERSION_FILE="./downloaded_artifacts/previous-coreos-version/coreos-installer_version.txt"
+          PREVIOUS_VERSION=""
 
-          if [ -f "$DOWNLOADED_PREVIOUS_SHA_FILE" ]; then
-            PREVIOUS_SHA256=$(cat "$DOWNLOADED_PREVIOUS_SHA_FILE")
-            echo "Previous coreos-installer SHA256 (from artifact): $PREVIOUS_SHA256"
+          if [ -f "$DOWNLOADED_PREVIOUS_VERSION_FILE" ]; then
+            PREVIOUS_VERSION=$(cat "$DOWNLOADED_PREVIOUS_VERSION_FILE")
+            echo "上一次记录的 coreos-installer 版本号 (来自 artifact): $PREVIOUS_VERSION"
           else
-            echo "No previous coreos-installer SHA256 artifact found."
+            echo "未找到上一次记录的 coreos-installer 版本号 artifact。"
           fi
 
-          CURRENT_SHA="${{ steps.date_step.outputs.current_sha256 }}" # 修正引用
+          CURRENT_VERSION="${{ steps.get_release.outputs.tag_name }}"
           NEEDS_RELEASE="false"
 
           # 检查触发事件类型和 force_release 输入
           EVENT_NAME="${{ github.event_name }}"
           FORCE_RELEASE_INPUT="${{ github.event.inputs.force_release }}"
 
-          echo "Event name: $EVENT_NAME"
-          echo "Force release input: $FORCE_RELEASE_INPUT"
+          echo "当前事件名称: $EVENT_NAME"
+          echo "强制发布输入: $FORCE_RELEASE_INPUT"
+          echo "当前官方最新版本: $CURRENT_VERSION"
 
           if [ "$EVENT_NAME" = "push" ]; then
               NEEDS_RELEASE="true"
-              echo "Workflow triggered by push event. A new release is needed (bypassing SHA256 comparison)."
+              echo "工作流由 push 事件触发。需要发布新版本 (跳过版本号比较)。"
           elif [ "$FORCE_RELEASE_INPUT" = "true" ]; then
               NEEDS_RELEASE="true"
-              echo "Force release input is true. A new release is needed (bypassing SHA256 comparison)."
-          elif [ -z "$PREVIOUS_SHA" ]; then # 第一次运行或者 artifact 已过期
+              echo "强制发布输入为 true。需要发布新版本 (跳过版本号比较)。"
+          elif [ -z "$PREVIOUS_VERSION" ]; then # 首次运行或者 artifact 已过期
               NEEDS_RELEASE="true"
-              echo "No previous SHA256 found (first run or artifact expired). A release is needed."
-          elif [ "$CURRENT_SHA" != "$PREVIOUS_SHA" ]; then
+              echo "未找到上一个版本号 (首次运行或 artifact 已过期)。需要发布新版本。"
+          elif [ "$CURRENT_VERSION" != "$PREVIOUS_VERSION" ]; then
               NEEDS_RELEASE="true"
-              echo "SHA256 values differ. A new release is needed."
+              echo "官方版本号已更新 (当前: $CURRENT_VERSION, 上次记录: $PREVIOUS_VERSION)。需要发布新版本。"
           else
-              echo "SHA256 values are the same. No new release needed."
+              echo "官方版本号未发生变化 (均为 $CURRENT_VERSION)。不需要发布新版本。"
           fi
 
           echo "needs_release=$NEEDS_RELEASE" >> "$GITHUB_OUTPUT"
 
-      - name: Upload current SHA256 as artifact
+      - name: Upload current version as artifact # 上传当前版本号作为 artifact
         uses: actions/upload-artifact@v4
         with:
-          name: previous-sha256
-          path: ./.github/coreos-installer_sha256.txt
-          retention-days: 7
-        if: always()
+          name: previous-coreos-version # artifact 名称，用于下次比较
+          path: ./.github/coreos-installer_current_version.txt # 要上传的文件路径
+          # retention-days: 7 # artifact 保留天数，可以根据需要调整或移除以使用默认值
+        if: always() # 无论比较结果如何，都尝试上传（如果文件已准备好）
 
   # 步骤 2: 多架构构建 Job
   build-multi-arch:
     needs: get-latest-release-info # 依赖于获取 Release 信息 Job
+    # 仅当 "get-latest-release-info" 步骤指示需要发布时才执行此 Job
+    if: ${{ success() && needs.get-latest-release-info.outputs.needs_release == 'true' }}
     runs-on: ubuntu-latest
     env: # 将所需变量提升到 Job 级别环境变量
       RELEASE_ZIP_URL: ${{ needs.get-latest-release-info.outputs.release_url }}
@@ -235,49 +181,51 @@ jobs:
       contents: read # 只需读取源码
       actions: write # 授予写入权限以上传 artifacts
     steps:
-      - name: Checkout your repository
+      - name: Checkout your repository # 检出当前仓库代码
         uses: actions/checkout@v4
 
-      - name: Download coreos-installer official release source
+      - name: Download coreos-installer official release source # 下载 coreos-installer 官方 Release 源码
         id: download_source # 为此步骤添加ID
         run: |
           # 从环境变量中的URL下载源码压缩包
+          echo "正在从 ${{ env.RELEASE_ZIP_URL }} 下载源码..."
           curl -L "${{ env.RELEASE_ZIP_URL }}" -o coreos-installer-source.zip
           
           # 检查下载是否成功（简单检查文件是否存在）
           if [ ! -f coreos-installer-source.zip ]; then
-            echo "Error: Failed to download coreos-installer source.zip. URL used: ${{ env.RELEASE_ZIP_URL }}"
+            echo "错误：未能下载 coreos-installer-source.zip。使用的 URL: ${{ env.RELEASE_ZIP_URL }}"
             exit 1
           fi
+          echo "源码下载完成。"
 
-          unzip coreos-installer-source.zip -d coreos-installer-source
+          unzip -q coreos-installer-source.zip -d coreos-installer-source # -q 安静模式解压
           
           # 找到实际的源码目录
-          # 修复: 使用 ls -d 查找唯一的子目录，因为 find 的模式可能不匹配
           COREOS_INSTALLER_DIR=$(ls -d coreos-installer-source/*/)
           
           # 检查 COREOS_INSTALLER_DIR 是否找到
           if [ -z "$COREOS_INSTALLER_DIR" ]; then
-            echo "Error: Could not find the coreos-installer source directory after unzipping."
-            echo "Content of coreos-installer-source:"
+            echo "错误：解压后未能找到 coreos-installer 源码目录。"
+            echo "coreos-installer-source 目录内容:"
             ls -F coreos-installer-source/ || true # 列出内容，如果目录不存在则忽略错误
             exit 1
           fi
 
-          echo "COREOS_INSTALLER_DIR=$COREOS_INSTALLER_DIR" # 打印调试信息
+          echo "coreos-installer 源码目录: $COREOS_INSTALLER_DIR"
           echo "coreos_installer_dir=$COREOS_INSTALLER_DIR" >> "$GITHUB_OUTPUT" # 设置为步骤输出变量
 
-      - name: Install build dependencies for ${{ matrix.target.name }}
+      - name: Install build dependencies for ${{ matrix.target.name }} # 为 ${{ matrix.target.name }} 安装构建依赖
         run: |
           sudo apt-get update
           sudo apt-get install -y libzstd-dev
           
           if [ "${{ matrix.target.rust_target }}" = "aarch64-unknown-linux-gnu" ]; then
-            # 安装交叉编译工具和依赖，crossbuild-essential-arm64 会处理多架构设置并拉取 libssl-dev:arm64
+            # 安装交叉编译工具和依赖
+            echo "正在为 aarch64 安装交叉编译工具..."
             sudo apt-get install -y crossbuild-essential-arm64
           fi
 
-      - name: Setup Rust toolchain for ${{ matrix.target.name }}
+      - name: Setup Rust toolchain for ${{ matrix.target.name }} # 为 ${{ matrix.target.name }} 设置 Rust 工具链
         uses: actions-rs/toolchain@v1
         with:
           toolchain: stable
@@ -285,42 +233,59 @@ jobs:
           override: true
           target: ${{ matrix.target.rust_target }}
 
-      - name: Build coreos-installer for ${{ matrix.target.name }}
+      - name: Build coreos-installer for ${{ matrix.target.name }} # 为 ${{ matrix.target.name }} 构建 coreos-installer
         env: # 在这里为每个构建目标设置优化环境变量
-          CARGO_PROFILE_RELEASE_OPT_LEVEL: "z"
-          CARGO_PROFILE_RELEASE_LTO: "fat"
-          CARGO_PROFILE_RELEASE_CODEGEN_UNITS: "1"
-          CARGO_PROFILE_RELEASE_PANIC: "abort"
-          CARGO_PROFILE_RELEASE_STRIP: "symbols"
-          # 针对 aarch64 交叉编译设置 PKG_CONFIG_PATH，帮助 openssl-sys 找到库
-          # 注意：这里假设 crossbuild-essential-arm64 将库安装到 /usr/lib/aarch64-linux-gnu/pkgconfig
-          # 如果实际路径不同，可能需要调整
+          CARGO_PROFILE_RELEASE_OPT_LEVEL: "z"  # 优化大小
+          CARGO_PROFILE_RELEASE_LTO: "fat"      # 链接时优化
+          CARGO_PROFILE_RELEASE_CODEGEN_UNITS: "1" # 单个代码生成单元，可能提高优化但编译较慢
+          CARGO_PROFILE_RELEASE_PANIC: "abort"  # panic 时直接终止
+          CARGO_PROFILE_RELEASE_STRIP: "symbols" # 剥离符号信息
+          # 针对 aarch64 交叉编译设置，帮助 openssl-sys 找到库
+          # 注意：这里假设 crossbuild-essential-arm64 将库安装到标准路径
           PKG_CONFIG_PATH: /usr/lib/aarch64-linux-gnu/pkgconfig:${{ env.PKG_CONFIG_PATH }}
-          # 显式设置 OPENSSL_DIR 和 PKG_CONFIG_SYSROOT_DIR
-          OPENSSL_DIR: /usr/aarch64-linux-gnu
-          PKG_CONFIG_SYSROOT_DIR: /usr/aarch64-linux-gnu
+          OPENSSL_DIR: /usr/aarch64-linux-gnu # 通常不需要，但有时有帮助
+          PKG_CONFIG_SYSROOT_DIR: / # 对于交叉编译，有时需要指向 sysroot
         run: |
+          echo "开始为 ${{ matrix.target.name }} (Rust target: ${{ matrix.target.rust_target }}) 构建 coreos-installer..."
           # 进入下载的源码目录进行编译
-          cd "${{ steps.download_source.outputs.coreos_installer_dir }}" # 使用步骤输出
+          cd "${{ steps.download_source.outputs.coreos_installer_dir }}"
+          
+          # 打印 cargo 版本和目标
+          cargo --version
+          echo "构建目标: ${{ matrix.target.rust_target }}"
+
+          # 如果是 aarch64，设置 CC 环境变量
+          if [ "${{ matrix.target.rust_target }}" = "aarch64-unknown-linux-gnu" ]; then
+            export CC_aarch64_unknown_linux_gnu=aarch64-linux-gnu-gcc
+            export AR_aarch64_unknown_linux_gnu=aarch64-linux-gnu-ar
+            export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc
+            echo "已为 aarch64 设置交叉编译环境变量。"
+          fi
+          
           cargo build --release --locked --target ${{ matrix.target.rust_target }}
+          echo "为 ${{ matrix.target.name }} 构建完成。"
           
           # 将编译好的二进制文件复制到工作区根目录并命名
           # 使用 github.workspace 来确保路径正确
           cp "target/${{ matrix.target.rust_target }}/release/coreos-installer" "${{ github.workspace }}/coreos-installer-${{ matrix.target.arch_suffix }}"
+          echo "已将编译产物复制到 ${{ github.workspace }}/coreos-installer-${{ matrix.target.arch_suffix }}"
 
-      - name: Calculate SHA256 for ${{ matrix.target.name }}
+      - name: Calculate SHA256 for ${{ matrix.target.name }} # 为 ${{ matrix.target.name }} 计算 SHA256
         run: |
           # 计算 SHA256 并生成 .sha256 文件
+          echo "正在为 ${{ github.workspace }}/coreos-installer-${{ matrix.target.arch_suffix }} 计算 SHA256..."
           sha256sum "${{ github.workspace }}/coreos-installer-${{ matrix.target.arch_suffix }}" > "${{ github.workspace }}/coreos-installer-${{ matrix.target.arch_suffix }}.sha256"
+          echo "SHA256 文件已生成: ${{ github.workspace }}/coreos-installer-${{ matrix.target.arch_suffix }}.sha256"
+          cat "${{ github.workspace }}/coreos-installer-${{ matrix.target.arch_suffix }}.sha256"
 
-      - name: Upload Artifacts for ${{ matrix.target.name }}
+      - name: Upload Artifacts for ${{ matrix.target.name }} # 为 ${{ matrix.target.name }} 上传 Artifacts
         uses: actions/upload-artifact@v4
         with:
           name: coreos-installer-${{ matrix.target.arch_suffix }} # 例如: coreos-installer-x86_64, coreos-installer-aarch64
           path: |
             ./coreos-installer-${{ matrix.target.arch_suffix }}
             ./coreos-installer-${{ matrix.target.arch_suffix }}.sha256
-          retention-days: 7 # artifacts for individual builds
+          # retention-days: 7 # 单独构建产物的保留天数
 
   # 步骤 3: 创建 Release Job (在所有构建完成后)
   create-release:
@@ -328,65 +293,82 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write # 授予写入权限以创建 Release
-      actions: write # 授予写入权限以下载 artifacts
+      actions: read   # 授予读取权限以下载 artifacts (注意：download-artifact v4 不需要 actions:write)
 
-    # 仅当 "get-latest-release-info" 步骤指示需要发布时才执行此 Job
+    # 仅当 "get-latest-release-info" 步骤指示需要发布，并且构建成功时才执行此 Job
     if: ${{ success() && needs.get-latest-release-info.outputs.needs_release == 'true' }}
     env: # 将所需变量提升到 Job 级别环境变量
       DATE_TAG: ${{ needs.get-latest-release-info.outputs.date_tag }}
-      OFFICIAL_TAG: ${{ needs.get-latest-release-info.outputs.release_tag }}
-      VERSION_PREFIX: ${{ needs.get-latest-release-info.outputs.release_version_prefix }}
-      DATE_NAME: ${{ needs.get-latest-release-info.outputs.date_name }} # 也将 date_name 添加到这里
+      OFFICIAL_TAG: ${{ needs.get-latest-release-info.outputs.release_tag }}             # 官方 Release 标签 (例如 v0.20.0)
+      VERSION_PREFIX: ${{ needs.get-latest-release-info.outputs.release_version_prefix }} # 版本前缀 (例如 0.20.0)
+      DATE_NAME: ${{ needs.get-latest-release-info.outputs.date_name }}                   # 日期名称 (例如 2023-10-26)
     steps:
-      - name: Download all coreos-installer artifacts
+      - name: Download all coreos-installer artifacts # 下载所有 coreos-installer 构建产物
         uses: actions/download-artifact@v4
         with:
           path: ./downloaded_release_assets/ # 所有构建产物下载到这个目录
+          # pattern: coreos-installer-* # 可以指定模式，如果还有其他 artifact 的话
+          # merge-multiple: true # 如果有多个同名 artifact (不太可能在这里发生)
 
-      - name: Prepare release assets
+      - name: List downloaded artifacts # 列出下载的产物 (调试用)
         run: |
-          mkdir -p release_assets
+          echo "列出下载的 Release 产物目录内容:"
+          ls -R ./downloaded_release_assets/
+
+      - name: Prepare release assets # 准备 Release 资产
+        run: |
+          mkdir -p release_assets # 创建用于存放最终 Release 资产的目录
           
-          # 直接使用 Job 级别的环境变量
-          # 例如：coreos-installer-0.20.0-x86_64-unknown-linux-gnu
+          echo "准备 x86_64 资产..."
+          # 复制 x86_64 资产并重命名
+          # 路径结构是 ./downloaded_release_assets/<artifact-name>/<file-name>
           cp "./downloaded_release_assets/coreos-installer-x86_64/coreos-installer-x86_64" \
-               "release_assets/coreos-installer-${{ env.VERSION_PREFIX }}-x86_64-unknown-linux-gnu"
+             "release_assets/coreos-installer-${{ env.VERSION_PREFIX }}-x86_64-unknown-linux-gnu"
           cp "./downloaded_release_assets/coreos-installer-x86_64/coreos-installer-x86_64.sha256" \
-               "release_assets/coreos-installer-${{ env.VERSION_PREFIX }}-x86_64-unknown-linux-gnu.sha256"
+             "release_assets/coreos-installer-${{ env.VERSION_PREFIX }}-x86_64-unknown-linux-gnu.sha256"
 
-          # 移动 aarch64 资产并重命名
+          echo "准备 aarch64 资产..."
+          # 复制 aarch64 资产并重命名
           cp "./downloaded_release_assets/coreos-installer-aarch64/coreos-installer-aarch64" \
-               "release_assets/coreos-installer-${{ env.VERSION_PREFIX }}-aarch64-unknown-linux-gnu"
+             "release_assets/coreos-installer-${{ env.VERSION_PREFIX }}-aarch64-unknown-linux-gnu"
           cp "./downloaded_release_assets/coreos-installer-aarch64/coreos-installer-aarch64.sha256" \
-               "release_assets/coreos-installer-${{ env.VERSION_PREFIX }}-aarch64-unknown-linux-gnu.sha256"
+             "release_assets/coreos-installer-${{ env.VERSION_PREFIX }}-aarch64-unknown-linux-gnu.sha256"
           
-          # 生成一个总的 SHA256SUMS 文件
-          sha256sum release_assets/* > release_assets/SHA256SUMS
+          echo "正在生成总的 SHA256SUMS 文件..."
+          # 进入 release_assets 目录生成 SHA256SUMS，使其包含相对路径
+          (cd release_assets && sha256sum coreos-installer-*) > release_assets/SHA256SUMS
+          
+          echo "Release 资产准备完成。目录 'release_assets' 内容:"
+          ls -l release_assets/
 
-      - name: Create Release
-        uses: softprops/action-gh-release@v1
+      - name: Create Release # 创建 GitHub Release
+        uses: softprops/action-gh-release@v1 # 使用社区维护的 action 来创建 Release
         with:
-          # Release 的标签使用官方 Release 的标签
-          tag_name: ${{ env.OFFICIAL_TAG }}
-          # Release 的名称可以包含官方标签和你的 nightly 日期，表明这是你的构建版本
-          name: coreos-installer Official Build ${{ env.OFFICIAL_TAG }} (${{ env.DATE_NAME }} rebuild)
+          # Release 的标签使用官方 Release 的标签，确保与上游一致性
+          # 如果您的仓库中已经存在此标签，发布可能会失败或行为不定，取决于 action 的实现
+          # 考虑是否需要添加日期或其他标识符以避免冲突，或者设置 prerelease/draft
+          tag_name: ${{ env.OFFICIAL_TAG }}-${{ env.DATE_TAG }} # 例如: v0.20.0-20231026
+          # Release 的名称可以包含官方标签和您的构建日期
+          name: coreos-installer 官方构建 ${{ env.OFFICIAL_TAG }} (每日重构于 ${{ env.DATE_NAME }})
           body: |
-            ### Automated Build of Official coreos-installer Release
+            ### `coreos-installer` 官方版本的自动化多架构构建
 
-            This is an automated multi-architecture build of `coreos-installer` from the official **${{ env.OFFICIAL_TAG }}** release.
+            这是基于 `coreos-installer` 官方 **${{ env.OFFICIAL_TAG }}** Release 的自动化多架构构建版本。
 
-            **Official Release Tag:** ${{ env.OFFICIAL_TAG }}
-            **Build Date:** ${{ env.DATE_NAME }}
-            **Commit:** ${{ github.sha }} (of your repository)
+            **官方 Release 标签:** ${{ env.OFFICIAL_TAG }}
+            **本次构建日期:** ${{ env.DATE_NAME }}
+            **触发本次构建的提交 (本仓库):** ${{ github.sha }}
 
-            **Assets:**
+            **包含的资产:**
             - `coreos-installer-${{ env.VERSION_PREFIX }}-x86_64-unknown-linux-gnu`
             - `coreos-installer-${{ env.VERSION_PREFIX }}-x86_64-unknown-linux-gnu.sha256`
             - `coreos-installer-${{ env.VERSION_PREFIX }}-aarch64-unknown-linux-gnu`
             - `coreos-installer-${{ env.VERSION_PREFIX }}-aarch64-unknown-linux-gnu.sha256`
-            - `SHA256SUMS`
+            - `SHA256SUMS` (包含以上所有二进制文件的校验和)
 
-            *Note: This build is based on the official release code. Please verify checksums.*
-          files: release_assets/*
+            *注意: 此构建基于官方发布的源码。请在使用前验证校验和。*
+          files: release_assets/* # 上传 'release_assets' 目录下的所有文件
+          # draft: false # 设置为 true 则创建草稿 Release
+          # prerelease: false # 设置为 true 则标记为预发布版本
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }} # GitHub Token 用于授权创建 Release
