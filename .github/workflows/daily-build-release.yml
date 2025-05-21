@@ -30,12 +30,12 @@ jobs:
           override: true
 
       - name: Build coreos-installer
-        run: cargo build --release --locked
+        run: cargo install coreos-installer --path .
 
       - name: Calculate current coreos-installer SHA256
         id: calculate_sha
         run: |
-          CURRENT_SHA256=$(sha256sum target/release/coreos-installer | awk '{print $1}')
+          CURRENT_SHA256=$(sha256sum coreos-installer | awk '{print $1}')
           echo "current_sha256=$CURRENT_SHA256" >> "$GITHUB_OUTPUT"
           echo "Current coreos-installer SHA256: $CURRENT_SHA256"
 
