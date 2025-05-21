@@ -1,5 +1,5 @@
 # 工作流名称
-name: Daily coreos-installer Official Release Build and Publish
+name: Daily coreos-installer Official Release Build and Publish (MUSL Static Linking)
 
 # 工作流触发条件
 on:
@@ -130,8 +130,9 @@ jobs:
           fi
           echo "needs_release=$NEEDS_RELEASE" >> "$GITHUB_OUTPUT"
 
-  # 步骤 2: 多架构构建 Job
-  build-multi-arch:
+  # 步骤 2: 多架构构建 Job (MUSL)
+  build-multi-arch-musl:
+    name: Build for ${{ matrix.target.name }} (MUSL)
     needs: get-latest-release-info # 依赖于获取 Release 信息 Job
     # 仅当 "get-latest-release-info" 步骤指示需要发布时才执行此 Job
     if: ${{ success() && needs.get-latest-release-info.outputs.needs_release == 'true' }}
@@ -164,12 +165,14 @@ jobs:
     strategy:
       matrix:
         target:
-          - name: x86_64-linux
-            rust_target: x86_64-unknown-linux-gnu
-            arch_suffix: x86_64
-          - name: arm64-linux
-            rust_target: aarch64-unknown-linux-gnu
-            arch_suffix: aarch64
+          - name: x86_64-linux-musl  # 更改目标名称以反映 MUSL
+            rust_target: x86_64-unknown-linux-musl # 更改 Rust 目标
+            arch_suffix: x86_64-musl # 更改产物后缀
+            c_compiler: gcc # 主机 GCC 应该能处理 x86_64 MUSL
+          - name: arm64-linux-musl   # 更改目标名称以反映 MUSL
+            rust_target: aarch64-unknown-linux-musl # 更改 Rust 目标
+            arch_suffix: aarch64-musl # 更改产物后缀
+            c_compiler: aarch64-linux-gnu-gcc # 交叉编译器
     permissions:
       contents: read # 只需读取源码
       actions: write # 授予写入权限以上传 artifacts
@@ -209,12 +212,14 @@ jobs:
 
       - name: Install build dependencies for ${{ matrix.target.name }} # 为 ${{ matrix.target.name }} 安装构建依赖
         run: |
-          # 对于所有架构，首先更新现有的 (默认为 amd64) 包列表并安装通用依赖
           sudo apt-get update
-          sudo apt-get install -y libzstd-dev pkg-config # 确保 pkg-config 和主机的 libzstd-dev 已安装
+          # 安装 musl-tools (提供 musl-gcc 包装器和 musl libc) 和 pkg-config
+          # 对于 x86_64-musl, musl-tools 中的 musl-gcc 应该足够
+          # 对于 aarch64-musl, 我们仍需 crossbuild-essential-arm64 提供底层的 aarch64-linux-gnu-gcc, musl-tools 会用它
+          sudo apt-get install -y musl-tools pkg-config libzstd-dev # 主机 libzstd-dev 仍然需要 (用于 .pc 文件)
           
-          if [ "${{ matrix.target.rust_target }}" = "aarch64-unknown-linux-gnu" ]; then
-            echo "为 aarch64 配置 APT 以支持多架构..."
+          if [ "${{ matrix.target.rust_target }}" = "aarch64-unknown-linux-musl" ]; then
+            echo "为 aarch64-musl 配置 APT 以支持多架构依赖..."
             sudo dpkg --add-architecture arm64
             
             echo "覆盖 /etc/apt/sources.list.d/ubuntu.sources 使其仅用于 amd64..."
@@ -229,30 +234,22 @@ jobs:
             echo "再次更新包列表 (应正确处理 amd64 和 arm64 源)..."
             sudo apt-get update -o Acquire::Retries=3 -o APT::Get::Always-Include-Phased-Updates=true
             
-            echo "正在为 aarch64 安装交叉编译工具, libssl-dev:arm64 和 libzstd-dev:arm64..."
+            echo "正在为 aarch64-musl 安装交叉编译工具, libssl-dev:arm64 和 libzstd-dev:arm64 (用于 .pc 文件)..."
             sudo apt-get install -y -o Acquire::Retries=3 crossbuild-essential-arm64 libssl-dev:arm64 libzstd-dev:arm64
             
             echo "验证 libssl-dev:arm64 是否已正确安装其 .pc 文件..."
             if [ ! -f /usr/lib/aarch64-linux-gnu/pkgconfig/openssl.pc ]; then
                 echo "错误: /usr/lib/aarch64-linux-gnu/pkgconfig/openssl.pc 未找到。"
-                ls -l /usr/lib/aarch64-linux-gnu/pkgconfig/ || echo "无法列出 /usr/lib/aarch64-linux-gnu/pkgconfig/"
                 exit 1
-            else
-                echo "/usr/lib/aarch64-linux-gnu/pkgconfig/openssl.pc 已找到。"
             fi
-            
             echo "验证 libzstd-dev:arm64 是否已正确安装其 .pc 文件..."
             if [ ! -f /usr/lib/aarch64-linux-gnu/pkgconfig/libzstd.pc ]; then
                 echo "错误: /usr/lib/aarch64-linux-gnu/pkgconfig/libzstd.pc 未找到。"
-                ls -l /usr/lib/aarch64-linux-gnu/pkgconfig/ || echo "无法列出 /usr/lib/aarch64-linux-gnu/pkgconfig/"
                 exit 1
-            else
-                echo "/usr/lib/aarch64-linux-gnu/pkgconfig/libzstd.pc 已找到。"
             fi
-          else
-            # 对于 x86_64 (主机) 构建, 确保主机 OpenSSL 和 ZSTD 开发库已安装 (libzstd-dev 已在上面安装)
-            echo "正在为主机 (${{ matrix.target.rust_target }}) 安装 libssl-dev (libzstd-dev 已安装)..."
-            sudo apt-get install -y libssl-dev 
+          else # x86_64-unknown-linux-musl
+            echo "正在为主机 musl 构建安装 libssl-dev (libzstd-dev 已安装)..."
+            sudo apt-get install -y libssl-dev
           fi
 
       - name: Setup Rust toolchain for ${{ matrix.target.name }} # 为 ${{ matrix.target.name }} 设置 Rust 工具链
@@ -261,7 +258,7 @@ jobs:
           toolchain: stable
           profile: minimal
           override: true
-          target: ${{ matrix.target.rust_target }}
+          target: ${{ matrix.target.rust_target }} # 确保安装了 MUSL 目标
 
       - name: Build coreos-installer for ${{ matrix.target.name }} # 为 ${{ matrix.target.name }} 构建 coreos-installer
         env: # 通用优化环境变量，适用于所有目标
@@ -270,6 +267,10 @@ jobs:
           CARGO_PROFILE_RELEASE_CODEGEN_UNITS: "1"
           CARGO_PROFILE_RELEASE_PANIC: "abort"
           CARGO_PROFILE_RELEASE_STRIP: "symbols"
+          # 为 MUSL 目标设置 C 编译器。musl-gcc 会处理链接 MUSL libc
+          # 对于 openssl-sys 和 zstd-sys，它们通常有 vendored 特性或能静态链接
+          OPENSSL_STATIC: "true" # 尝试强制 openssl-sys 静态链接
+          ZSTD_STATIC: "true"    # 尝试强制 zstd-sys 静态链接 (如果支持)
         run: |
           echo "开始为 ${{ matrix.target.name }} (Rust target: ${{ matrix.target.rust_target }}) 构建 coreos-installer..."
           cd "${{ steps.download_source.outputs.coreos_installer_dir }}"
@@ -278,78 +279,45 @@ jobs:
           cargo --version
           echo "构建目标: ${{ matrix.target.rust_target }}"
 
-          # 无条件清理可能存在的 OPENSSL 环境变量
-          echo "清理 OPENSSL_* 环境变量..."
-          unset OPENSSL_DIR
-          unset OPENSSL_LIB_DIR
-          unset OPENSSL_INCLUDE_DIR
-          
-          # 清理 PKG_CONFIG 相关的环境变量，以便根据目标架构重新设置
-          unset PKG_CONFIG
-          unset PKG_CONFIG_PATH
-          unset PKG_CONFIG_LIBDIR
-          unset PKG_CONFIG_SYSROOT_DIR
+          # 清理可能冲突的环境变量
+          unset OPENSSL_DIR OPENSSL_LIB_DIR OPENSSL_INCLUDE_DIR
+          unset PKG_CONFIG PKG_CONFIG_PATH PKG_CONFIG_LIBDIR PKG_CONFIG_SYSROOT_DIR
 
-
-          if [ "${{ matrix.target.rust_target }}" = "aarch64-unknown-linux-gnu" ]; then
-            echo "为 aarch64 配置交叉编译特定环境变量..."
-            export CC_aarch64_unknown_linux_gnu=aarch64-linux-gnu-gcc
-            export AR_aarch64_unknown_linux_gnu=aarch64-linux-gnu-ar
-            export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc
-            
-            # 使用主机标准的 pkg-config，并为其设置交叉编译环境
-            HOST_PKG_CONFIG=$(command -v pkg-config)
-            if [ -z "$HOST_PKG_CONFIG" ]; then
-                echo "错误: 主机 pkg-config 未找到。"
-                exit 1
+          # 为 MUSL 目标配置 C 编译器和 pkg-config
+          if [[ "${{ matrix.target.rust_target }}" == *"-musl" ]]; then
+            # 对于 MUSL 目标，Rust 通常会查找 <target_triple>-gcc (例如 x86_64-linux-musl-gcc)
+            # musl-tools 应该提供了 musl-gcc，它是一个包装器
+            # 我们需要确保 Rust 使用正确的链接器，通常是 musl-gcc
+            # 对于交叉编译 aarch64-musl，底层的 C 编译器是 aarch64-linux-gnu-gcc，musl-gcc 会用它
+            export CC="${{ matrix.target.c_compiler }}"
+            if [ "${{ matrix.target.rust_target }}" = "aarch64-unknown-linux-musl" ]; then
+              export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER="${{ matrix.target.c_compiler }}"
+              # 配置 pkg-config 以查找 aarch64 的 .pc 文件，即使我们是静态链接 MUSL，
+              # openssl-sys/zstd-sys 的构建脚本仍可能使用它来找到头文件等。
+              HOST_PKG_CONFIG=$(command -v pkg-config)
+              if [ -z "$HOST_PKG_CONFIG" ]; then echo "错误: 主机 pkg-config 未找到。" >&2; exit 1; fi
+              export PKG_CONFIG="$HOST_PKG_CONFIG"
+              export PKG_CONFIG_ALLOW_CROSS_COMPILE=true
+              export PKG_CONFIG_LIBDIR="/usr/lib/aarch64-linux-gnu/pkgconfig" # .pc 文件位置
+              echo "  (aarch64-musl) CC: $CC"
+              echo "  (aarch64-musl) LINKER: ${CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER}"
+              echo "  (aarch64-musl) PKG_CONFIG: $PKG_CONFIG"
+              echo "  (aarch64-musl) PKG_CONFIG_LIBDIR: $PKG_CONFIG_LIBDIR"
+            else # x86_64-unknown-linux-musl
+              export CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER="musl-gcc"
+              # 主机 pkg-config 应该能找到主机的 libssl-dev 和 libzstd-dev 的 .pc 文件
+              HOST_PKG_CONFIG=$(command -v pkg-config)
+              if [ -z "$HOST_PKG_CONFIG" ]; then echo "错误: 主机 pkg-config 未找到。" >&2; exit 1; fi
+              export PKG_CONFIG="$HOST_PKG_CONFIG"
+              echo "  (x86_64-musl) CC: $CC"
+              echo "  (x86_64-musl) LINKER: ${CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER}"
+              echo "  (x86_64-musl) PKG_CONFIG: $PKG_CONFIG"
             fi
-            export PKG_CONFIG="$HOST_PKG_CONFIG"
-            export PKG_CONFIG_ALLOW_CROSS_COMPILE=true
-            export PKG_CONFIG_LIBDIR="/usr/lib/aarch64-linux-gnu/pkgconfig"
-            
-            echo "  (aarch64) CC: $CC_aarch64_unknown_linux_gnu"
-            echo "  (aarch64) AR: $AR_aarch64_unknown_linux_gnu"
-            echo "  (aarch64) LINKER: $CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER"
-            echo "  (aarch64) PKG_CONFIG (将使用的可执行文件): $PKG_CONFIG"
-            echo "  (aarch64) PKG_CONFIG_ALLOW_CROSS_COMPILE: $PKG_CONFIG_ALLOW_CROSS_COMPILE"
-            echo "  (aarch64) PKG_CONFIG_LIBDIR (将搜索的 .pc 文件路径): $PKG_CONFIG_LIBDIR"
-
-            echo "使用 $PKG_CONFIG (为 aarch64 配置) 调试 OpenSSL:"
-            $PKG_CONFIG --debug --exists --print-errors openssl || echo "openssl 未被 $PKG_CONFIG 找到 (错误码: $?)"
-            echo "OpenSSL 版本: $($PKG_CONFIG --modversion openssl || echo '获取版本失败')"
-            echo "OpenSSL 库: $($PKG_CONFIG --libs openssl || echo '获取库失败')"
-            echo "OpenSSL CFLAGS: $($PKG_CONFIG --cflags openssl || echo '获取 CFLAGS 失败')"
-            
-            echo "使用 $PKG_CONFIG (为 aarch64 配置) 调试 Zstd:"
-            $PKG_CONFIG --debug --exists --print-errors libzstd || echo "libzstd 未被 $PKG_CONFIG 找到 (错误码: $?)"
-            echo "Zstd 版本: $($PKG_CONFIG --modversion libzstd || echo '获取版本失败')"
-            echo "Zstd 库: $($PKG_CONFIG --libs libzstd || echo '获取库失败')"
-            echo "Zstd CFLAGS: $($PKG_CONFIG --cflags libzstd || echo '获取 CFLAGS 失败')"
-
-          else
-            echo "为主机 (${{ matrix.target.rust_target }}) 配置环境..."
-            HOST_PKG_CONFIG=$(command -v pkg-config)
-            if [ -z "$HOST_PKG_CONFIG" ]; then
-                echo "错误: 主机 pkg-config 未找到。"
-                exit 1
-            fi
-            export PKG_CONFIG="$HOST_PKG_CONFIG"
-            echo "  (主机) PKG_CONFIG: $PKG_CONFIG"
-            echo "使用 $PKG_CONFIG (为主机配置) 调试 OpenSSL:"
-            $PKG_CONFIG --debug --exists --print-errors openssl || echo "openssl 未被 $PKG_CONFIG 找到 (错误码: $?)"
-            echo "使用 $PKG_CONFIG (为主机配置) 调试 Zstd:"
-            $PKG_CONFIG --debug --exists --print-errors libzstd || echo "libzstd 未被 $PKG_CONFIG 找到 (错误码: $?)"
           fi
           
-          echo "执行 cargo build 前的环境变量状态 (最终):"
-          echo "  OPENSSL_DIR: '${OPENSSL_DIR:-已取消设置}'"
-          echo "  OPENSSL_LIB_DIR: '${OPENSSL_LIB_DIR:-已取消设置}'"
-          echo "  OPENSSL_INCLUDE_DIR: '${OPENSSL_INCLUDE_DIR:-已取消设置}'"
-          echo "  PKG_CONFIG: '${PKG_CONFIG:-未设置}'"
-          echo "  PKG_CONFIG_PATH: '${PKG_CONFIG_PATH:-已取消设置或未设置}'"
-          echo "  PKG_CONFIG_LIBDIR: '${PKG_CONFIG_LIBDIR:-未设置}'"
-          echo "  PKG_CONFIG_ALLOW_CROSS_COMPILE: '${PKG_CONFIG_ALLOW_CROSS_COMPILE:-未设置}'"
-          
+          echo "执行 cargo build..."
+          # 尝试添加 RUSTFLAGS 来鼓励静态链接依赖项，尽管这更多取决于 -sys crate 的行为
+          # RUSTFLAGS="-C target-feature=+crt-static" cargo build --release --locked --target ${{ matrix.target.rust_target }}
           cargo build --release --locked --target ${{ matrix.target.rust_target }}
           echo "为 ${{ matrix.target.name }} 构建完成。"
           
@@ -361,122 +329,109 @@ jobs:
           # 计算 SHA256 并生成 .sha256 文件
           echo "正在为 ${{ github.workspace }}/coreos-installer-${{ matrix.target.arch_suffix }} 计算 SHA256..."
           sha256sum "${{ github.workspace }}/coreos-installer-${{ matrix.target.arch_suffix }}" > "${{ github.workspace }}/coreos-installer-${{ matrix.target.arch_suffix }}.sha256"
-          echo "SHA256 文件已生成: ${{ github.workspace }}/coreos-installer-${{ matrix.target.arch_suffix }}.sha256"
           cat "${{ github.workspace }}/coreos-installer-${{ matrix.target.arch_suffix }}.sha256"
 
       - name: Upload Artifacts for ${{ matrix.target.name }} # 为 ${{ matrix.target.name }} 上传 Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: coreos-installer-${{ matrix.target.arch_suffix }} # 例如: coreos-installer-x86_64, coreos-installer-aarch64
+          name: coreos-installer-${{ matrix.target.arch_suffix }} # 例如: coreos-installer-x86_64-musl
           path: |
             ./coreos-installer-${{ matrix.target.arch_suffix }}
             ./coreos-installer-${{ matrix.target.arch_suffix }}.sha256
-          # retention-days: 7 # 单独构建产物的保留天数
 
-  # 步骤 3: 创建 Release Job (在所有构建完成后)
-  create-release:
-    needs: [get-latest-release-info, build-multi-arch] # 依赖于获取信息和所有构建 Job
+  # 步骤 3: 创建 Release Job (MUSL)
+  create-release-musl:
+    name: Create MUSL Release
+    needs: [get-latest-release-info, build-multi-arch-musl] # 依赖于获取信息和所有 MUSL 构建 Job
     runs-on: ubuntu-latest
     permissions:
       contents: write # 授予写入权限以创建 Release
-      actions: read   # 授予读取权限以下载 artifacts (注意：download-artifact v4 不需要 actions:write)
-
-    # 仅当 "get-latest-release-info" 步骤指示需要发布，并且构建成功时才执行此 Job
+      actions: read   # 授予读取权限以下载 artifacts
     if: ${{ success() && needs.get-latest-release-info.outputs.needs_release == 'true' }}
     env: # 将所需变量提升到 Job 级别环境变量
       DATE_TAG: ${{ needs.get-latest-release-info.outputs.date_tag }}
-      OFFICIAL_TAG: ${{ needs.get-latest-release-info.outputs.release_tag }}             # 官方 Release 标签 (例如 v0.20.0)
-      VERSION_PREFIX: ${{ needs.get-latest-release-info.outputs.release_version_prefix }} # 版本前缀 (例如 0.20.0)
-      DATE_NAME: ${{ needs.get-latest-release-info.outputs.date_name }}                   # 日期名称 (例如 2023-10-26)
+      OFFICIAL_TAG: ${{ needs.get-latest-release-info.outputs.release_tag }}
+      VERSION_PREFIX: ${{ needs.get-latest-release-info.outputs.release_version_prefix }}
+      DATE_NAME: ${{ needs.get-latest-release-info.outputs.date_name }}
     steps:
-      - name: Download all coreos-installer artifacts # 下载所有 coreos-installer 构建产物
+      - name: Download all coreos-installer MUSL artifacts # 下载所有 coreos-installer MUSL 构建产物
         uses: actions/download-artifact@v4
         with:
-          path: ./downloaded_release_assets/ # 所有构建产物下载到这个目录
-          # pattern: coreos-installer-* # 可以指定模式，如果还有其他 artifact 的话
-          # merge-multiple: true # 如果有多个同名 artifact (不太可能在这里发生)
+          path: ./downloaded_release_assets/ 
+          # pattern: coreos-installer-*-musl # 如果有其他非 musl 的 artifact，可以使用模式
 
       - name: List downloaded artifacts # 列出下载的产物 (调试用)
-        run: |
-          echo "列出下载的 Release 产物目录内容:"
-          ls -R ./downloaded_release_assets/
+        run: ls -R ./downloaded_release_assets/
 
       - name: Prepare release assets # 准备 Release 资产
         run: |
           mkdir -p release_assets # 创建用于存放最终 Release 资产的目录
           
-          echo "准备 x86_64 版本化资产..."
-          cp "./downloaded_release_assets/coreos-installer-x86_64/coreos-installer-x86_64" \
-             "release_assets/coreos-installer-${{ env.VERSION_PREFIX }}-x86_64-unknown-linux-gnu"
-          cp "./downloaded_release_assets/coreos-installer-x86_64/coreos-installer-x86_64.sha256" \
-             "release_assets/coreos-installer-${{ env.VERSION_PREFIX }}-x86_64-unknown-linux-gnu.sha256"
+          echo "准备 x86_64-musl 版本化资产..."
+          cp "./downloaded_release_assets/coreos-installer-x86_64-musl/coreos-installer-x86_64-musl" \
+             "release_assets/coreos-installer-${{ env.VERSION_PREFIX }}-x86_64-unknown-linux-musl"
+          cp "./downloaded_release_assets/coreos-installer-x86_64-musl/coreos-installer-x86_64-musl.sha256" \
+             "release_assets/coreos-installer-${{ env.VERSION_PREFIX }}-x86_64-unknown-linux-musl.sha256"
 
-          echo "准备 aarch64 版本化资产..."
-          cp "./downloaded_release_assets/coreos-installer-aarch64/coreos-installer-aarch64" \
-             "release_assets/coreos-installer-${{ env.VERSION_PREFIX }}-aarch64-unknown-linux-gnu"
-          cp "./downloaded_release_assets/coreos-installer-aarch64/coreos-installer-aarch64.sha256" \
-             "release_assets/coreos-installer-${{ env.VERSION_PREFIX }}-aarch64-unknown-linux-gnu.sha256"
+          echo "准备 aarch64-musl 版本化资产..."
+          cp "./downloaded_release_assets/coreos-installer-aarch64-musl/coreos-installer-aarch64-musl" \
+             "release_assets/coreos-installer-${{ env.VERSION_PREFIX }}-aarch64-unknown-linux-musl"
+          cp "./downloaded_release_assets/coreos-installer-aarch64-musl/coreos-installer-aarch64-musl.sha256" \
+             "release_assets/coreos-installer-${{ env.VERSION_PREFIX }}-aarch64-unknown-linux-musl.sha256"
 
-          echo "准备 x86_64 固定名称资产 (latest)..."
-          cp "./downloaded_release_assets/coreos-installer-x86_64/coreos-installer-x86_64" \
-             "release_assets/coreos-installer-x86_64-latest"
-          cp "./downloaded_release_assets/coreos-installer-x86_64/coreos-installer-x86_64.sha256" \
-             "release_assets/coreos-installer-x86_64-latest.sha256"
+          echo "准备 x86_64-musl 固定名称资产 (latest)..."
+          cp "./downloaded_release_assets/coreos-installer-x86_64-musl/coreos-installer-x86_64-musl" \
+             "release_assets/coreos-installer-x86_64-musl-latest"
+          cp "./downloaded_release_assets/coreos-installer-x86_64-musl/coreos-installer-x86_64-musl.sha256" \
+             "release_assets/coreos-installer-x86_64-musl-latest.sha256"
 
-          echo "准备 aarch64 固定名称资产 (latest)..."
-          cp "./downloaded_release_assets/coreos-installer-aarch64/coreos-installer-aarch64" \
-             "release_assets/coreos-installer-aarch64-latest"
-          cp "./downloaded_release_assets/coreos-installer-aarch64/coreos-installer-aarch64.sha256" \
-             "release_assets/coreos-installer-aarch64-latest.sha256"
+          echo "准备 aarch64-musl 固定名称资产 (latest)..."
+          cp "./downloaded_release_assets/coreos-installer-aarch64-musl/coreos-installer-aarch64-musl" \
+             "release_assets/coreos-installer-aarch64-musl-latest"
+          cp "./downloaded_release_assets/coreos-installer-aarch64-musl/coreos-installer-aarch64-musl.sha256" \
+             "release_assets/coreos-installer-aarch64-musl-latest.sha256"
           
-          echo "正在生成总的 SHA256SUMS 文件..."
-          # 明确列出要包含在 SHA256SUMS 中的二进制文件
+          echo "正在生成总的 SHA256SUMS 文件 (MUSL)..."
           (cd release_assets && sha256sum \
-            coreos-installer-${{ env.VERSION_PREFIX }}-x86_64-unknown-linux-gnu \
-            coreos-installer-${{ env.VERSION_PREFIX }}-aarch64-unknown-linux-gnu \
-            coreos-installer-x86_64-latest \
-            coreos-installer-aarch64-latest \
-          ) > release_assets/SHA256SUMS
-          
-          echo "Release 资产准备完成。目录 'release_assets' 内容:"
+            coreos-installer-${{ env.VERSION_PREFIX }}-x86_64-unknown-linux-musl \
+            coreos-installer-${{ env.VERSION_PREFIX }}-aarch64-unknown-linux-musl \
+            coreos-installer-x86_64-musl-latest \
+            coreos-installer-aarch64-musl-latest \
+          ) > release_assets/SHA256SUMS-musl # 为 musl 版本使用不同的 SHA256SUMS 文件名或合并
+
+          echo "Release MUSL 资产准备完成。目录 'release_assets' 内容:"
           ls -l release_assets/
 
-      - name: Create Release # 创建 GitHub Release
-        uses: softprops/action-gh-release@v1 # 使用社区维护的 action 来创建 Release
+      - name: Create Release (MUSL) # 创建 GitHub Release (MUSL)
+        uses: softprops/action-gh-release@v1 
         with:
-          # Release 的标签使用官方 Release 的标签，确保与上游一致性
-          # 如果您的仓库中已经存在此标签，发布可能会失败或行为不定，取决于 action 的实现
-          # 考虑是否需要添加日期或其他标识符以避免冲突，或者设置 prerelease/draft
-          tag_name: ${{ env.OFFICIAL_TAG }}-${{ env.DATE_TAG }} # 例如: v0.20.0-20231026
-          # Release 的名称可以包含官方标签和您的构建日期
-          name: coreos-installer 官方构建 ${{ env.OFFICIAL_TAG }} (每日重构于 ${{ env.DATE_NAME }})
+          tag_name: ${{ env.OFFICIAL_TAG }}-${{ env.DATE_TAG }}-musl # 为 MUSL Release 添加 -musl 后缀
+          name: coreos-installer 官方构建 ${{ env.OFFICIAL_TAG }} (MUSL 静态链接, ${{ env.DATE_NAME }})
           body: |
-            ### `coreos-installer` 官方版本的自动化多架构构建
+            ### `coreos-installer` 官方版本的自动化多架构构建 (MUSL 静态链接)
 
-            这是基于 `coreos-installer` 官方 **${{ env.OFFICIAL_TAG }}** Release 的自动化多架构构建版本。
+            这是基于 `coreos-installer` 官方 **${{ env.OFFICIAL_TAG }}** Release 的自动化多架构构建版本，使用 MUSL Libc 进行静态链接。
 
             **官方 Release 标签:** ${{ env.OFFICIAL_TAG }}
             **本次构建日期:** ${{ env.DATE_NAME }}
             **触发本次构建的提交 (本仓库):** ${{ github.sha }}
 
-            **包含的资产:**
+            **包含的资产 (MUSL):**
             *版本化资产:*
-            - `coreos-installer-${{ env.VERSION_PREFIX }}-x86_64-unknown-linux-gnu`
-            - `coreos-installer-${{ env.VERSION_PREFIX }}-x86_64-unknown-linux-gnu.sha256`
-            - `coreos-installer-${{ env.VERSION_PREFIX }}-aarch64-unknown-linux-gnu`
-            - `coreos-installer-${{ env.VERSION_PREFIX }}-aarch64-unknown-linux-gnu.sha256`
+            - `coreos-installer-${{ env.VERSION_PREFIX }}-x86_64-unknown-linux-musl`
+            - `coreos-installer-${{ env.VERSION_PREFIX }}-x86_64-unknown-linux-musl.sha256`
+            - `coreos-installer-${{ env.VERSION_PREFIX }}-aarch64-unknown-linux-musl`
+            - `coreos-installer-${{ env.VERSION_PREFIX }}-aarch64-unknown-linux-musl.sha256`
 
-            *固定名称最新资产 (指向此 Release 中的对应架构文件):*
-            - `coreos-installer-x86_64-latest`
-            - `coreos-installer-x86_64-latest.sha256`
-            - `coreos-installer-aarch64-latest`
-            - `coreos-installer-aarch64-latest.sha256`
+            *固定名称最新资产 (指向此 Release 中的对应架构 MUSL 文件):*
+            - `coreos-installer-x86_64-musl-latest`
+            - `coreos-installer-x86_64-musl-latest.sha256`
+            - `coreos-installer-aarch64-musl-latest`
+            - `coreos-installer-aarch64-musl-latest.sha256`
             
-            - `SHA256SUMS` (包含以上所有二进制文件的校验和)
+            - `SHA256SUMS-musl` (包含以上所有 MUSL 二进制文件的校验和)
 
             *注意: 此构建基于官方发布的源码。请在使用前验证校验和。*
           files: release_assets/* # 上传 'release_assets' 目录下的所有文件
-          # draft: false # 设置为 true 则创建草稿 Release
-          # prerelease: false # 设置为 true 则标记为预发布版本
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }} # GitHub Token 用于授权创建 Release
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
