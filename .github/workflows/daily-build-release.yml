@@ -22,12 +22,12 @@ jobs:
   get-latest-release-info:
     runs-on: ubuntu-latest
     outputs:
-      release_tag: ${{ steps.get_official_release.outputs.official_release_tag }}     # 输出官方 coreos-installer 的最新 Release 标签
-      release_url: ${{ steps.get_official_release.outputs.official_zipball_url }}    # 输出官方 coreos-installer 最新 Release 的源码下载 URL
+      release_tag: ${{ steps.get_official_release.outputs.official_release_tag }}      # 输出官方 coreos-installer 的最新 Release 标签
+      release_url: ${{ steps.get_official_release.outputs.official_zipball_url }}      # 输出官方 coreos-installer 最新 Release 的源码下载 URL
       release_version_prefix: ${{ steps.get_official_release.outputs.official_version_prefix }} # 输出从官方标签提取的版本前缀
-      date_tag: ${{ steps.get_date.outputs.date_tag }}                     # 输出当前日期标签 (例如 20231026)
-      date_name: ${{ steps.get_date.outputs.date_name }}                   # 输出当前日期名称 (例如 2023-10-26)
-      needs_release: ${{ steps.determine_release_need.outputs.needs_release }}   # 输出是否需要发布新版本的标志 (true/false)
+      date_tag: ${{ steps.get_date.outputs.date_tag }}                                # 输出当前日期标签 (例如 20231026)
+      date_name: ${{ steps.get_date.outputs.date_name }}                              # 输出当前日期名称 (例如 2023-10-26)
+      needs_release: ${{ steps.determine_release_need.outputs.needs_release }}        # 输出是否需要发布新版本的标志 (true/false)
     permissions:
       contents: read # 检出代码和进行 API 调用（针对本仓库）通常需要读取权限
 
@@ -99,7 +99,8 @@ jobs:
           PREVIOUS_OFFICIAL_EQUIVALENT_TAG=""
           if [ -n "$OWN_LATEST_TAG_FULL" ] && [ "$OWN_LATEST_TAG_FULL" != "null" ]; then
             # 从本仓库的 Release 标签 (例如 v0.24.0-20250521-musl) 提取核心版本部分 (例如 v0.24.0)
-            PREVIOUS_OFFICIAL_EQUIVALENT_TAG=$(echo "$OWN_LATEST_TAG_FULL" | sed 's/-musl$//' | cut -d'-' -f1)
+            # Adjusted to handle tags like v0.24.0-musl or v0.24.0-20240101-musl
+            PREVIOUS_OFFICIAL_EQUIVALENT_TAG=$(echo "$OWN_LATEST_TAG_FULL" | sed -E 's/(-[0-9]+)?-musl$//')
             echo "本仓库最新 Release 标签中的核心版本部分: $PREVIOUS_OFFICIAL_EQUIVALENT_TAG"
           else
             echo "本仓库中未找到之前的有效 Release 标签。"
@@ -113,9 +114,9 @@ jobs:
           echo "强制发布输入: $FORCE_RELEASE_INPUT"
           echo "CoreOS/coreos-installer 最新官方 Release 标签: $CURRENT_OFFICIAL_TAG"
 
-          if [ "$EVENT_NAME" = "push" ]; then
+          if [ "$EVENT_NAME" = "push" ] && [ "${{ github.ref }}" = "refs/heads/main" ]; then # 仅当推送到 main 分支时
               NEEDS_RELEASE="true"
-              echo "工作流由 push 事件触发。需要发布新版本 (跳过版本号比较)。"
+              echo "工作流由 push 到 main 事件触发。需要发布新版本 (跳过版本号比较)。"
           elif [ "$FORCE_RELEASE_INPUT" = "true" ]; then
               NEEDS_RELEASE="true"
               echo "强制发布输入为 true。需要发布新版本 (跳过版本号比较)。"
@@ -126,7 +127,13 @@ jobs:
               NEEDS_RELEASE="true"
               echo "官方 coreos-installer 版本已更新 (官方最新: $CURRENT_OFFICIAL_TAG, 本仓库上次构建基于的官方版本: $PREVIOUS_OFFICIAL_EQUIVALENT_TAG)。需要发布新版本。"
           else
-              echo "官方 coreos-installer 版本未发生变化 (均为 $CURRENT_OFFICIAL_TAG，与本仓库上次构建基于的官方版本一致)。不需要发布新版本。"
+              echo "官方 coreos-installer 版本未发生变化 (均为 $CURRENT_OFFICIAL_TAG，与本仓库上次构建基于的官方版本一致)。不需要发布新版本 (除非是 push 到 main 或强制发布)。"
+              # For scheduled runs, if versions match, no release is needed unless forced.
+              # If it's a push event not to main, or other manual dispatch without force, this logic path might be hit.
+              # The top-level if for push to main handles that specific trigger.
+              if [ "$EVENT_NAME" = "schedule" ]; then
+                NEEDS_RELEASE="false" # Explicitly false for schedule if versions match
+              fi
           fi
           echo "needs_release=$NEEDS_RELEASE" >> "$GITHUB_OUTPUT"
 
@@ -169,14 +176,19 @@ jobs:
             rust_target: x86_64-unknown-linux-musl
             arch_suffix: x86_64-musl
             c_compiler: musl-gcc 
-            target_cflags: "-I/usr/include/x86_64-linux-gnu" # Target specific CFLAGS for headers
+            # CFLAGS for arch-specific headers (e.g., opensslconf.h)
+            target_cflags: "-I/usr/include/x86_64-linux-gnu" 
             target_lib_path: "/usr/lib/x86_64-linux-gnu"
             target_pkgconfig_libdir: "/usr/lib/x86_64-linux-gnu/pkgconfig"
           - name: arm64-linux-musl
             rust_target: aarch64-unknown-linux-musl
             arch_suffix: aarch64-musl
-            c_compiler: aarch64-linux-gnu-gcc 
-            target_cflags: "-I/usr/include/aarch64-linux-gnu" # Target specific CFLAGS for headers
+            c_compiler: aarch64-linux-gnu-gcc # For MUSL, this should ideally be aarch64-linux-musl-gcc if available and configured
+                                              # Using aarch64-linux-gnu-gcc with MUSL target in Rust can be tricky.
+                                              # However, coreos-installer might be simple enough.
+                                              # If issues persist, a dedicated MUSL cross-compiler for aarch64 might be needed.
+            # CFLAGS for arch-specific headers
+            target_cflags: "-I/usr/include/aarch64-linux-gnu" 
             target_lib_path: "/usr/lib/aarch64-linux-gnu"
             target_pkgconfig_libdir: "/usr/lib/aarch64-linux-gnu/pkgconfig"
     permissions:
@@ -196,42 +208,56 @@ jobs:
             exit 1
           fi
           unzip -q coreos-installer-source.zip -d coreos-installer-source
-          COREOS_INSTALLER_DIR=$(ls -d coreos-installer-source/*/)
+          COREOS_INSTALLER_DIR=$(find coreos-installer-source -mindepth 1 -maxdepth 1 -type d -print -quit) # More robust find
           if [ -z "$COREOS_INSTALLER_DIR" ]; then
             echo "错误：解压后未能找到 coreos-installer 源码目录。"
+            ls -R coreos-installer-source # List contents for debugging
             exit 1
           fi
           echo "coreos_installer_dir=$COREOS_INSTALLER_DIR" >> "$GITHUB_OUTPUT"
+          echo "源码解压到: $COREOS_INSTALLER_DIR"
 
       - name: Install build dependencies for ${{ matrix.target.name }} # 为 ${{ matrix.target.name }} 安装构建依赖
         run: |
           sudo apt-get update
-          sudo apt-get install -y musl-tools pkg-config libzstd-dev 
+          # musl-tools for musl-gcc, pkg-config for build scripts, libzstd-dev for zstd support
+          # libssl-dev for OpenSSL headers and libraries (host version, but headers are used)
+          sudo apt-get install -y musl-tools pkg-config libssl-dev libzstd-dev 
           
           if [ "${{ matrix.target.rust_target }}" = "aarch64-unknown-linux-musl" ]; then
             echo "为 aarch64-musl 配置 APT 以支持多架构依赖..."
             sudo dpkg --add-architecture arm64
-            echo "$AMD64_ONLY_UBUNTU_SOURCES" | sudo tee /etc/apt/sources.list.d/ubuntu.sources > /dev/null
-            echo "$ARM64_UBUNTU_PORTS_SOURCES" | sudo tee /etc/apt/sources.list.d/arm64-ubuntu-ports.sources > /dev/null
+            # Ensure sources are correctly configured for multi-arch
+            echo "$AMD64_ONLY_UBUNTU_SOURCES" | sudo tee /etc/apt/sources.list.d/ubuntu-amd64.sources > /dev/null
+            echo "$ARM64_UBUNTU_PORTS_SOURCES" | sudo tee /etc/apt/sources.list.d/ubuntu-arm64-ports.sources > /dev/null
             sudo apt-get clean
             sudo apt-get update -o Acquire::Retries=3 -o APT::Get::Always-Include-Phased-Updates=true
+            
+            # Install arm64 versions of dev libraries
+            # crossbuild-essential-arm64 for aarch64-linux-gnu-gcc (linker for aarch64-musl target)
+            # libssl-dev:arm64 and libzstd-dev:arm64 for arm64 headers/libs
             sudo apt-get install -y -o Acquire::Retries=3 crossbuild-essential-arm64 libssl-dev:arm64 libzstd-dev:arm64
             
             echo "验证 aarch64 OpenSSL .pc 和 .a 文件..."
             if ! ls -l /usr/lib/aarch64-linux-gnu/pkgconfig/openssl.pc /usr/lib/aarch64-linux-gnu/libssl.a /usr/lib/aarch64-linux-gnu/libcrypto.a > /dev/null 2>&1; then
-                echo "错误: aarch64 的 OpenSSL .pc 或 .a 文件未找到。" ; exit 1
+                echo "错误: aarch64 的 OpenSSL .pc 或 .a 文件未找到。检查 /usr/lib/aarch64-linux-gnu/ 和其 pkgconfig 子目录。"
+                ls -l /usr/lib/aarch64-linux-gnu/pkgconfig/ /usr/lib/aarch64-linux-gnu/
+                exit 1
             fi
             echo "验证 aarch64 Zstd .pc 和 .a 文件..."
             if ! ls -l /usr/lib/aarch64-linux-gnu/pkgconfig/libzstd.pc /usr/lib/aarch64-linux-gnu/libzstd.a > /dev/null 2>&1; then
                 echo "错误: aarch64 的 Zstd .pc 或 .a 文件未找到。" ; exit 1
             fi
+            echo "aarch64 OpenSSL 和 Zstd 依赖已安装。"
           else # x86_64-unknown-linux-musl
-            echo "正在为主机 musl 构建安装 libssl-dev..."
-            sudo apt-get install -y libssl-dev
-            echo "验证主机 OpenSSL 和 Zstd .pc 和 .a 文件..."
+            echo "正在为主机 (x86_64) musl 构建安装 libssl-dev 和 libzstd-dev (已在前面安装)..."
+            # libssl-dev and libzstd-dev for x86_64 are already installed by the common line above.
+            # Verification for x86_64
+            echo "验证主机 OpenSSL .pc 和 .a 文件..."
             if ! ls -l /usr/lib/x86_64-linux-gnu/pkgconfig/openssl.pc /usr/lib/x86_64-linux-gnu/libssl.a /usr/lib/x86_64-linux-gnu/libcrypto.a > /dev/null 2>&1; then
                 echo "错误: 主机的 OpenSSL .pc 或 .a 文件未在 /usr/lib/x86_64-linux-gnu/ 中找到。" ; exit 1
             fi
+            echo "验证主机 Zstd .pc 和 .a 文件..."
             if ! ls -l /usr/lib/x86_64-linux-gnu/pkgconfig/libzstd.pc /usr/lib/x86_64-linux-gnu/libzstd.a > /dev/null 2>&1; then
                 echo "错误: 主机的 Zstd .pc 或 .a 文件未在 /usr/lib/x86_64-linux-gnu/ 中找到。" ; exit 1
             fi
@@ -255,84 +281,104 @@ jobs:
           CARGO_PROFILE_RELEASE_STRIP: "symbols"
           OPENSSL_STATIC: "true" 
           ZSTD_STATIC: "true"
+          # PKG_CONFIG_ALLOW_SYSTEM_CFLAGS: "1" # May help pkg-config behave
+          # PKG_CONFIG_ALLOW_SYSTEM_LIBS: "1"
         run: |
           echo "开始为 ${{ matrix.target.name }} (Rust target: ${{ matrix.target.rust_target }}) 构建 coreos-installer..."
           cd "${{ steps.download_source.outputs.coreos_installer_dir }}"
           
-          # 清理所有可能冲突的环境变量，然后精确设置
-          unset OPENSSL_DIR OPENSSL_LIB_DIR OPENSSL_INCLUDE_DIR 
-          unset PKG_CONFIG PKG_CONFIG_PATH PKG_CONFIG_LIBDIR PKG_CONFIG_SYSROOT_DIR
-          unset CFLAGS CXXFLAGS CPPFLAGS LDFLAGS # 清空全局 C/C++ 编译和链接标志
+          # 清理可能冲突的环境变量 (可选，但有时有帮助)
+          # unset OPENSSL_DIR OPENSSL_LIB_DIR OPENSSL_INCLUDE_DIR 
+          # unset PKG_CONFIG_PATH PKG_CONFIG_SYSROOT_DIR # PKG_CONFIG_LIBDIR is set below
+          # unset CFLAGS CXXFLAGS CPPFLAGS LDFLAGS # Global flags cleared, target specific set below
 
+          # --- 通用 OpenSSL/ZSTD 配置 ---
+          # 主 OpenSSL 头文件 (opensslv.h, etc.) 位于 /usr/include/openssl/
+          # openssl-sys 期望 OPENSSL_INCLUDE_DIR 指向包含 'openssl' 子目录的目录
+          if [ -d "/usr/include/openssl" ]; then
+              export OPENSSL_INCLUDE_DIR="/usr/include"
+          else
+              echo "错误: 关键的 OpenSSL 包含目录 /usr/include/openssl 未找到。" >&2; exit 1
+          fi
+          # ZSTD headers are typically also in /usr/include
+          if [ -d "/usr/include" ]; then # Assuming zstd.h is in /usr/include/zstd.h
+              export ZSTD_INCLUDE_DIR="/usr/include"
+          fi
+          
+          # --- 特定目标配置 ---
           if [[ "${{ matrix.target.rust_target }}" == "x86_64-unknown-linux-musl" ]]; then
             export CC="${{ matrix.target.c_compiler }}" 
-            export CXX="musl-g++"
+            export CXX="musl-g++" # Assuming musl-g++ is available via musl-tools
             export CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER="${{ matrix.target.c_compiler }}"
             
-            # 为 openssl-sys 设置特定环境变量
-            export OPENSSL_DIR="/usr" 
-            export OPENSSL_LIB_DIR="${{ matrix.target.target_lib_path }}"
-            export OPENSSL_INCLUDE_DIR="${{ matrix.target.target_lib_path }}/../include" # 通常是 /usr/include 或 /usr/include/x86_64-linux-gnu
-            # 更精确地指向包含 openssl 子目录的路径
-            if [ -d "/usr/include/x86_64-linux-gnu/openssl" ]; then
-              export OPENSSL_INCLUDE_DIR="/usr/include/x86_64-linux-gnu"
-            elif [ -d "/usr/include/openssl" ]; then
-              export OPENSSL_INCLUDE_DIR="/usr/include"
-            fi
+            export OPENSSL_LIB_DIR="${{ matrix.target.target_lib_path }}" # /usr/lib/x86_64-linux-gnu
+            export ZSTD_LIB_DIR="${{ matrix.target.target_lib_path }}"    # /usr/lib/x86_64-linux-gnu
+            
+            # CFLAGS for cc-rs to find arch-specific headers like opensslconf.h
+            export CFLAGS_x86_64_unknown_linux_musl="${{ matrix.target.target_cflags }}" # -I/usr/include/x86_64-linux-gnu
 
-            # 为 zstd-sys (及其他) 配置 pkg-config
+            # pkg-config for host, but pointing to target's .pc files directory
             HOST_PKG_CONFIG=$(command -v pkg-config)
             if [ -z "$HOST_PKG_CONFIG" ]; then echo "错误: 主机 pkg-config 未找到。" >&2; exit 1; fi
             export PKG_CONFIG="$HOST_PKG_CONFIG"
-            export PKG_CONFIG_LIBDIR="${{ matrix.target.target_pkgconfig_libdir }}"
+            export PKG_CONFIG_LIBDIR="${{ matrix.target.target_pkgconfig_libdir }}" # /usr/lib/x86_64-linux-gnu/pkgconfig
 
             export RUSTFLAGS="-Lnative=${{ matrix.target.target_lib_path }}"
             export LIBRARY_PATH="${{ matrix.target.target_lib_path }}:${LIBRARY_PATH:-}"
-            # 设置目标特定的 CFLAGS，主要用于 openssl-sys 的 build.rs 编译 C 代码时查找头文件
-            export CFLAGS_x86_64_unknown_linux_musl="${{ matrix.target.target_cflags }}"
 
             echo "  (x86_64-musl) CC: $CC, CXX: $CXX, LINKER: $CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER"
-            echo "  (x86_64-musl) OPENSSL_DIR: $OPENSSL_DIR, OPENSSL_LIB_DIR: $OPENSSL_LIB_DIR, OPENSSL_INCLUDE_DIR: $OPENSSL_INCLUDE_DIR"
+            echo "  (x86_64-musl) OPENSSL_LIB_DIR: $OPENSSL_LIB_DIR, OPENSSL_INCLUDE_DIR: $OPENSSL_INCLUDE_DIR"
+            echo "  (x86_64-musl) ZSTD_LIB_DIR: $ZSTD_LIB_DIR, ZSTD_INCLUDE_DIR: $ZSTD_INCLUDE_DIR"
             echo "  (x86_64-musl) PKG_CONFIG: $PKG_CONFIG, PKG_CONFIG_LIBDIR: $PKG_CONFIG_LIBDIR"
             echo "  (x86_64-musl) RUSTFLAGS: $RUSTFLAGS, LIBRARY_PATH: $LIBRARY_PATH"
             echo "  (x86_64-musl) CFLAGS_x86_64_unknown_linux_musl: $CFLAGS_x86_64_unknown_linux_musl"
-            $PKG_CONFIG --static --debug --cflags --libs openssl || echo "pkg-config openssl (static) 失败"
-            $PKG_CONFIG --static --debug --cflags --libs libzstd || echo "pkg-config libzstd (static) 失败"
+            echo "  检查 pkg-config for openssl (static):"
+            $PKG_CONFIG --static --print-errors --cflags --libs openssl || echo "  pkg-config openssl (static) 失败或未找到，将依赖环境变量。"
+            echo "  检查 pkg-config for libzstd (static):"
+            $PKG_CONFIG --static --print-errors --cflags --libs libzstd || echo "  pkg-config libzstd (static) 失败或未找到，将依赖环境变量。"
 
           elif [[ "${{ matrix.target.rust_target }}" == "aarch64-unknown-linux-musl" ]]; then
-            export CC="${{ matrix.target.c_compiler }}" 
+            export CC="${{ matrix.target.c_compiler }}" # aarch64-linux-gnu-gcc
             export CXX="aarch64-linux-gnu-g++"
+            # For a MUSL target, the linker should ideally be specific to aarch64-linux-musl.
+            # Using aarch64-linux-gnu-gcc as linker for a MUSL target might require specific flags or setup.
+            # This is a common complexity in cross-compiling for MUSL.
             export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER="${{ matrix.target.c_compiler }}"
 
-            export OPENSSL_DIR="/usr"
-            export OPENSSL_LIB_DIR="${{ matrix.target.target_lib_path }}"
-            export OPENSSL_INCLUDE_DIR="${{ matrix.target.target_lib_path }}/../include" # 通常是 /usr/include/aarch64-linux-gnu
-            if [ -d "/usr/include/aarch64-linux-gnu/openssl" ]; then
-              export OPENSSL_INCLUDE_DIR="/usr/include/aarch64-linux-gnu"
-            elif [ -d "/usr/include/openssl" ]; then # Fallback for some systems
-                export OPENSSL_INCLUDE_DIR="/usr/include"
-            fi
+            export OPENSSL_LIB_DIR="${{ matrix.target.target_lib_path }}" # /usr/lib/aarch64-linux-gnu
+            export ZSTD_LIB_DIR="${{ matrix.target.target_lib_path }}"    # /usr/lib/aarch64-linux-gnu
+
+            # CFLAGS for cc-rs to find arch-specific headers
+            export CFLAGS_aarch64_unknown_linux_musl="${{ matrix.target.target_cflags }}" # -I/usr/include/aarch64-linux-gnu
             
+            # For cross-compilation with pkg-config:
             HOST_PKG_CONFIG=$(command -v pkg-config)
             if [ -z "$HOST_PKG_CONFIG" ]; then echo "错误: 主机 pkg-config 未找到。" >&2; exit 1; fi
             export PKG_CONFIG="$HOST_PKG_CONFIG"
-            export PKG_CONFIG_ALLOW_CROSS_COMPILE=true
-            export PKG_CONFIG_LIBDIR="${{ matrix.target.target_pkgconfig_libdir }}"
+            # PKG_CONFIG_SYSROOT_DIR might be needed for cross-compiling if .pc files are in a sysroot
+            # export PKG_CONFIG_SYSROOT_DIR=/path/to/aarch64/sysroot 
+            export PKG_CONFIG_LIBDIR="${{ matrix.target.target_pkgconfig_libdir }}" # /usr/lib/aarch64-linux-gnu/pkgconfig
+            # It's important that openssl.pc and libzstd.pc in this path are for aarch64
             
             export RUSTFLAGS="-Lnative=${{ matrix.target.target_lib_path }}" 
             export LIBRARY_PATH="${{ matrix.target.target_lib_path }}:${LIBRARY_PATH:-}"
-            export CFLAGS_aarch64_unknown_linux_musl="${{ matrix.target.target_cflags }}"
             
             echo "  (aarch64-musl) CC: $CC, CXX: $CXX, LINKER: $CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER"
-            echo "  (aarch64-musl) OPENSSL_DIR: $OPENSSL_DIR, OPENSSL_LIB_DIR: $OPENSSL_LIB_DIR, OPENSSL_INCLUDE_DIR: $OPENSSL_INCLUDE_DIR"
+            echo "  (aarch64-musl) OPENSSL_LIB_DIR: $OPENSSL_LIB_DIR, OPENSSL_INCLUDE_DIR: $OPENSSL_INCLUDE_DIR"
+            echo "  (aarch64-musl) ZSTD_LIB_DIR: $ZSTD_LIB_DIR, ZSTD_INCLUDE_DIR: $ZSTD_INCLUDE_DIR"
             echo "  (aarch64-musl) PKG_CONFIG: $PKG_CONFIG, PKG_CONFIG_LIBDIR: $PKG_CONFIG_LIBDIR"
             echo "  (aarch64-musl) RUSTFLAGS: $RUSTFLAGS, LIBRARY_PATH: $LIBRARY_PATH"
             echo "  (aarch64-musl) CFLAGS_aarch64_unknown_linux_musl: $CFLAGS_aarch64_unknown_linux_musl"
-            $PKG_CONFIG --static --debug --cflags --libs openssl || echo "pkg-config openssl (static, aarch64) 失败"
-            $PKG_CONFIG --static --debug --cflags --libs libzstd || echo "pkg-config libzstd (static, aarch64) 失败"
+            echo "  检查 pkg-config for openssl (static, aarch64):"
+            $PKG_CONFIG --static --print-errors --cflags --libs openssl || echo "  pkg-config openssl (static, aarch64) 失败或未找到，将依赖环境变量。"
+            echo "  检查 pkg-config for libzstd (static, aarch64):"
+            $PKG_CONFIG --static --print-errors --cflags --libs libzstd || echo "  pkg-config libzstd (static, aarch64) 失败或未找到，将依赖环境变量。"
           fi
           
-          cargo build --release --locked --target ${{ matrix.target.rust_target }}
+          echo "当前环境变量给 Cargo:"
+          env | grep -E 'OPENSSL_|ZSTD_|CC|CXX|CFLAGS|RUSTFLAGS|LIBRARY_PATH|PKG_CONFIG' | sort
+
+          cargo build --release --locked --target ${{ matrix.target.rust_target }} -v # Added -v for verbose output
           echo "为 ${{ matrix.target.name }} 构建完成。"
           
           cp "target/${{ matrix.target.rust_target }}/release/coreos-installer" "${{ github.workspace }}/coreos-installer-${{ matrix.target.arch_suffix }}"
@@ -347,8 +393,9 @@ jobs:
         with:
           name: coreos-installer-${{ matrix.target.arch_suffix }}
           path: |
-            ./coreos-installer-${{ matrix.target.arch_suffix }}
-            ./coreos-installer-${{ matrix.target.arch_suffix }}.sha256
+            ${{ github.workspace }}/coreos-installer-${{ matrix.target.arch_suffix }}
+            ${{ github.workspace }}/coreos-installer-${{ matrix.target.arch_suffix }}.sha256
+          retention-days: 7 # Optional: set retention for artifacts
 
   # 步骤 3: 创建 Release Job (MUSL)
   create-release-musl:
@@ -356,8 +403,8 @@ jobs:
     needs: [get-latest-release-info, build-multi-arch-musl] 
     runs-on: ubuntu-latest
     permissions:
-      contents: write 
-      actions: read   
+      contents: write  # Needed to create releases
+      actions: read    # Needed to download artifacts from other jobs in the same workflow
     if: ${{ success() && needs.get-latest-release-info.outputs.needs_release == 'true' }}
     env: 
       DATE_TAG: ${{ needs.get-latest-release-info.outputs.date_tag }}
@@ -369,37 +416,51 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           path: ./downloaded_release_assets/ 
+          # download-artifact@v4 downloads all artifacts if 'name' is not specified,
+          # placing them in subdirectories named after the artifact.
 
       - name: List downloaded artifacts 
-        run: ls -R ./downloaded_release_assets/
+        run: |
+          echo "下载的资产结构:"
+          ls -R ./downloaded_release_assets/
 
       - name: Prepare release assets 
+        id: prepare_assets
         run: |
-          mkdir -p release_assets 
-          
-          echo "准备 x86_64-musl 版本化资产..."
-          cp "./downloaded_release_assets/coreos-installer-x86_64-musl/coreos-installer-x86_64-musl" \
-             "release_assets/coreos-installer-${{ env.VERSION_PREFIX }}-x86_64-unknown-linux-musl"
-          cp "./downloaded_release_assets/coreos-installer-x86_64-musl/coreos-installer-x86_64-musl.sha256" \
-             "release_assets/coreos-installer-${{ env.VERSION_PREFIX }}-x86_64-unknown-linux-musl.sha256"
+          mkdir -p release_assets # Target directory for assets to be uploaded
+          ASSET_LIST="" # String to hold list of files for release action
 
-          echo "准备 aarch64-musl 版本化资产..."
-          cp "./downloaded_release_assets/coreos-installer-aarch64-musl/coreos-installer-aarch64-musl" \
-             "release_assets/coreos-installer-${{ env.VERSION_PREFIX }}-aarch64-unknown-linux-musl"
-          cp "./downloaded_release_assets/coreos-installer-aarch64-musl/coreos-installer-aarch64-musl.sha256" \
-             "release_assets/coreos-installer-${{ env.VERSION_PREFIX }}-aarch64-unknown-linux-musl.sha256"
+          # Iterate over each downloaded artifact (which are in subdirectories)
+          for arch_dir in ./downloaded_release_assets/coreos-installer-*-musl; do
+            if [ -d "$arch_dir" ]; then
+              arch_suffix=$(basename "$arch_dir" | sed 's/coreos-installer-//') # e.g., x86_64-musl or aarch64-musl
+              rust_target_suffix=$(echo "$arch_suffix" | sed 's/-musl/-unknown-linux-musl/') # e.g., x86_64-unknown-linux-musl
+              if [[ "$arch_suffix" == "aarch64-musl" ]]; then # Correct aarch64 rust target suffix
+                  rust_target_suffix="aarch64-unknown-linux-musl"
+              fi
 
-          echo "准备 x86_64-musl 固定名称资产 (latest)..."
-          cp "./downloaded_release_assets/coreos-installer-x86_64-musl/coreos-installer-x86_64-musl" \
-             "release_assets/coreos-installer-x86_64-musl-latest"
-          cp "./downloaded_release_assets/coreos-installer-x86_64-musl/coreos-installer-x86_64-musl.sha256" \
-             "release_assets/coreos-installer-x86_64-musl-latest.sha256"
 
-          echo "准备 aarch64-musl 固定名称资产 (latest)..."
-          cp "./downloaded_release_assets/coreos-installer-aarch64-musl/coreos-installer-aarch64-musl" \
-             "release_assets/coreos-installer-aarch64-musl-latest"
-          cp "./downloaded_release_assets/coreos-installer-aarch64-musl/coreos-installer-aarch64-musl.sha256" \
-             "release_assets/coreos-installer-aarch64-musl-latest.sha256"
+              echo "准备 ${arch_suffix} 版本化资产..."
+              # Versioned asset (binary)
+              cp "${arch_dir}/coreos-installer-${arch_suffix}" \
+                 "release_assets/coreos-installer-${{ env.VERSION_PREFIX }}-${rust_target_suffix}"
+              ASSET_LIST="${ASSET_LIST}release_assets/coreos-installer-${{ env.VERSION_PREFIX }}-${rust_target_suffix}\n"
+              # Versioned asset (sha256)
+              cp "${arch_dir}/coreos-installer-${arch_suffix}.sha256" \
+                 "release_assets/coreos-installer-${{ env.VERSION_PREFIX }}-${rust_target_suffix}.sha256"
+              ASSET_LIST="${ASSET_LIST}release_assets/coreos-installer-${{ env.VERSION_PREFIX }}-${rust_target_suffix}.sha256\n"
+
+              echo "准备 ${arch_suffix} 固定名称资产 (latest)..."
+              # Latest asset (binary)
+              cp "${arch_dir}/coreos-installer-${arch_suffix}" \
+                 "release_assets/coreos-installer-${arch_suffix}-latest"
+              ASSET_LIST="${ASSET_LIST}release_assets/coreos-installer-${arch_suffix}-latest\n"
+              # Latest asset (sha256)
+              cp "${arch_dir}/coreos-installer-${arch_suffix}.sha256" \
+                 "release_assets/coreos-installer-${arch_suffix}-latest.sha256"
+              ASSET_LIST="${ASSET_LIST}release_assets/coreos-installer-${arch_suffix}-latest.sha256\n"
+            fi
+          done
           
           echo "正在生成总的 SHA256SUMS 文件 (MUSL)..."
           (cd release_assets && sha256sum \
@@ -408,9 +469,15 @@ jobs:
             coreos-installer-x86_64-musl-latest \
             coreos-installer-aarch64-musl-latest \
           ) > release_assets/SHA256SUMS-musl 
+          ASSET_LIST="${ASSET_LIST}release_assets/SHA256SUMS-musl\n"
 
           echo "Release MUSL 资产准备完成。目录 'release_assets' 内容:"
           ls -l release_assets/
+          
+          # Output the list of files for the release action
+          # Replace newlines with spaces for the softprops/action-gh-release 'files' input
+          echo "asset_files=$(echo -e "$ASSET_LIST" | tr '\n' ' ' | sed 's/ $//')" >> "$GITHUB_OUTPUT"
+
 
       - name: Create Release (MUSL) 
         uses: softprops/action-gh-release@v1 
@@ -424,7 +491,7 @@ jobs:
 
             **官方 Release 标签:** ${{ env.OFFICIAL_TAG }}
             **本次构建日期:** ${{ env.DATE_NAME }}
-            **触发本次构建的提交 (本仓库):** ${{ github.sha }}
+            **触发本次构建的提交 (本仓库):** `${{ github.server_url }}/${{ github.repository }}/commit/${{ github.sha }}`
 
             **包含的资产 (MUSL):**
             *版本化资产:*
@@ -442,6 +509,17 @@ jobs:
             - `SHA256SUMS-musl` (包含以上所有 MUSL 二进制文件的校验和)
 
             *注意: 此构建基于官方发布的源码。请在使用前验证校验和。*
-          files: release_assets/* 
-          env:
+          files: ${{ steps.prepare_assets.outputs.asset_files }}
+          # Alternatively, if the above doesn't work due to multiline to single line conversion issues:
+          # files: |
+          #   release_assets/coreos-installer-${{ env.VERSION_PREFIX }}-x86_64-unknown-linux-musl
+          #   release_assets/coreos-installer-${{ env.VERSION_PREFIX }}-x86_64-unknown-linux-musl.sha256
+          #   release_assets/coreos-installer-${{ env.VERSION_PREFIX }}-aarch64-unknown-linux-musl
+          #   release_assets/coreos-installer-${{ env.VERSION_PREFIX }}-aarch64-unknown-linux-musl.sha256
+          #   release_assets/coreos-installer-x86_64-musl-latest
+          #   release_assets/coreos-installer-x86_64-musl-latest.sha256
+          #   release_assets/coreos-installer-aarch64-musl-latest
+          #   release_assets/coreos-installer-aarch64-musl-latest.sha256
+          #   release_assets/SHA256SUMS-musl
+        env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
