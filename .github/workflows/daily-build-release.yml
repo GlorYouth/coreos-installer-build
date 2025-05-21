@@ -263,7 +263,10 @@ jobs:
           sudo apt-get install -y libzstd-dev
           
           if [ "${{ matrix.target.rust_target }}" = "aarch64-unknown-linux-gnu" ]; then
-            sudo apt-get install -y gcc-aarch64-linux-gnu
+            # 为 aarch64 交叉编译安装 OpenSSL 开发库
+            sudo dpkg --add-architecture arm64
+            sudo apt-get update
+            sudo apt-get install -y libssl-dev:arm64 gcc-aarch64-linux-gnu
           fi
 
       - name: Setup Rust toolchain for ${{ matrix.target.name }}
@@ -281,6 +284,10 @@ jobs:
           CARGO_PROFILE_RELEASE_CODEGEN_UNITS: "1"
           CARGO_PROFILE_RELEASE_PANIC: "abort"
           CARGO_PROFILE_RELEASE_STRIP: "symbols"
+          # 针对 aarch64 交叉编译设置 PKG_CONFIG_PATH，帮助 openssl-sys 找到库
+          # 注意：这里假设 libssl-dev:arm64 将库安装到 /usr/lib/aarch64-linux-gnu/pkgconfig
+          # 如果实际路径不同，可能需要调整
+          PKG_CONFIG_PATH: /usr/lib/aarch64-linux-gnu/pkgconfig:${{ env.PKG_CONFIG_PATH }}
         run: |
           # 进入下载的源码目录进行编译
           cd "${{ steps.download_source.outputs.coreos_installer_dir }}" # 使用步骤输出
