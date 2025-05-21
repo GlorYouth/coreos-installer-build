@@ -1,0 +1,119 @@
+name: Daily coreos-installer Build and Conditional Release
+
+on:
+  schedule:
+    - cron: '0 0 * * *' # 每天 UTC 时间 00:00 (午夜) 运行
+  workflow_dispatch:
+    # 允许手动触发此工作流
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # 授予写入权限以创建 Release
+      actions: write # 授予写入权限以上传/下载 artifacts (如果需要)
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libzstd-dev
+
+      - name: Setup Rust toolchain
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          profile: minimal
+          override: true
+
+      - name: Build coreos-installer
+        run: cargo build --release --locked
+
+      - name: Calculate current coreos-installer SHA256
+        id: calculate_sha
+        run: |
+          CURRENT_SHA256=$(sha256sum target/release/coreos-installer | awk '{print $1}')
+          echo "current_sha256=$CURRENT_SHA256" >> "$GITHUB_OUTPUT"
+          echo "Current coreos-installer SHA256: $CURRENT_SHA256"
+
+      - name: Download previous SHA256 artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: previous-sha256
+          path: ./.github/
+        continue-on-error: true # 第一次运行或没有 artifact 时，允许失败
+
+      - name: Check for previous SHA256
+        id: check_previous_sha
+        run: |
+          PREVIOUS_SHA_FILE="./.github/coreos-installer_sha256.txt"
+          PREVIOUS_SHA256=""
+
+          if [ -f "$PREVIOUS_SHA_FILE" ]; then
+            PREVIOUS_SHA256=$(cat "$PREVIOUS_SHA_FILE")
+            echo "Previous coreos-installer SHA256: $PREVIOUS_SHA256"
+          else
+            echo "No previous coreos-installer SHA256 found."
+          fi
+
+          echo "previous_sha256=$PREVIOUS_SHA256" >> "$GITHUB_OUTPUT"
+
+      - name: Compare SHA256 and set release flag
+        id: compare_sha
+        run: |
+          CURRENT_SHA="${{ steps.calculate_sha.outputs.current_sha256 }}"
+          PREVIOUS_SHA="${{ steps.check_previous_sha.outputs.previous_sha256 }}"
+          NEEDS_RELEASE="false"
+
+          if [ "$CURRENT_SHA" != "$PREVIOUS_SHA" ]; then
+            NEEDS_RELEASE="true"
+            echo "SHA256 values differ. A new release is needed."
+          else
+            echo "SHA256 values are the same. No new release needed."
+          fi
+
+          echo "needs_release=$NEEDS_RELEASE" >> "$GITHUB_OUTPUT"
+
+      - name: Prepare release assets
+        if: ${{ steps.compare_sha.outputs.needs_release == 'true' }} # 仅当需要 Release 时才准备资产
+        run: |
+          mkdir -p release_assets
+          ASSET_NAME="coreos-installer-$(date +%Y%m%d)-x86_64-unknown-linux-gnu"
+          cp target/release/coreos-installer release_assets/$ASSET_NAME
+          sha256sum release_assets/* > release_assets/SHA256SUMS
+          # 将当前的SHA256保存到文件中，用于下一次运行的对比
+          echo "${{ steps.calculate_sha.outputs.current_sha256 }}" > .github/coreos-installer_sha256.txt
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        if: ${{ success() && steps.compare_sha.outputs.needs_release == 'true' }} # 仅当构建成功且需要 Release 时才创建 Release
+        with:
+          tag_name: nightly-$(date +%Y%m%d)
+          name: coreos-installer Nightly Build $(date +%Y-%m-%d)
+          body: |
+            ### Daily Build of coreos-installer
+
+            This is an automated nightly build of `coreos-installer` from the `main` branch.
+
+            **Build Date:** $(date +%Y-%m-%d)
+            **Commit:** ${{ github.sha }}
+
+            **Assets:**
+            - `coreos-installer-$(date +%Y%m%d)-x86_64-unknown-linux-gnu`
+            - `SHA256SUMS`
+
+            *Note: This is a nightly build and may contain unstable features or bugs. Use at your own risk.*
+          files: release_assets/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload current SHA256 as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: previous-sha256
+          path: ./.github/coreos-installer_sha256.txt
+          retention-days: 7 # 保留 artifact 7 天，足够进行下次对比
+        if: always() # 无论构建是否成功，都尝试上传 SHA256，确保下次有数据
