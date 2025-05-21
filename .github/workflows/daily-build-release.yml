@@ -217,12 +217,16 @@ jobs:
       - name: Install build dependencies for ${{ matrix.target.name }} # 为 ${{ matrix.target.name }} 安装构建依赖
         run: |
           sudo apt-get update
-          sudo apt-get install -y libzstd-dev # 对所有目标通用
+          sudo apt-get install -y libzstd-dev pkg-config # 确保 pkg-config 和通用依赖已安装
           
           if [ "${{ matrix.target.rust_target }}" = "aarch64-unknown-linux-gnu" ]; then
             # 安装交叉编译工具和针对 arm64 的 OpenSSL 开发库
             echo "正在为 aarch64 安装交叉编译工具和 libssl-dev:arm64..."
             sudo apt-get install -y crossbuild-essential-arm64 libssl-dev:arm64
+          else
+            # 对于 x86_64 (主机) 构建, 确保主机 OpenSSL 开发库已安装
+            echo "正在为主机 (${{ matrix.target.rust_target }}) 安装 libssl-dev..."
+            sudo apt-get install -y libssl-dev 
           fi
 
       - name: Setup Rust toolchain for ${{ matrix.target.name }} # 为 ${{ matrix.target.name }} 设置 Rust 工具链
@@ -242,35 +246,46 @@ jobs:
           CARGO_PROFILE_RELEASE_STRIP: "symbols"
         run: |
           echo "开始为 ${{ matrix.target.name }} (Rust target: ${{ matrix.target.rust_target }}) 构建 coreos-installer..."
-          # 进入下载的源码目录进行编译
           cd "${{ steps.download_source.outputs.coreos_installer_dir }}"
           
-          # 打印 cargo 版本和目标
+          echo "当前工作目录: $(pwd)"
           cargo --version
           echo "构建目标: ${{ matrix.target.rust_target }}"
 
-          # 针对 aarch64 交叉编译设置特定的环境变量
+          # 无条件清理可能存在的 OPENSSL 环境变量，以强制依赖 pkg-config
+          echo "清理 OPENSSL_* 环境变量以依赖 pkg-config..."
+          unset OPENSSL_DIR
+          unset OPENSSL_LIB_DIR
+          unset OPENSSL_INCLUDE_DIR
+          unset PKG_CONFIG_SYSROOT_DIR # 通常在 pkg-config 正确配置后不需要
+
           if [ "${{ matrix.target.rust_target }}" = "aarch64-unknown-linux-gnu" ]; then
+            echo "为 aarch64 配置交叉编译特定环境变量..."
             export CC_aarch64_unknown_linux_gnu=aarch64-linux-gnu-gcc
             export AR_aarch64_unknown_linux_gnu=aarch64-linux-gnu-ar
             export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc
             
             # 设置 PKG_CONFIG_PATH 以便 pkg-config 能找到 aarch64 的 .pc 文件
-            # 这是让 openssl-sys 找到正确 OpenSSL 库和头文件的关键
             if [ -z "$PKG_CONFIG_PATH" ]; then
               export PKG_CONFIG_PATH="/usr/lib/aarch64-linux-gnu/pkgconfig"
             else
               export PKG_CONFIG_PATH="/usr/lib/aarch64-linux-gnu/pkgconfig:$PKG_CONFIG_PATH"
             fi
-            
-            # 清除可能导致问题的 OPENSSL_* 环境变量，让 pkg-config 发挥作用
-            unset OPENSSL_DIR
-            unset OPENSSL_LIB_DIR
-            unset OPENSSL_INCLUDE_DIR
-            unset PKG_CONFIG_SYSROOT_DIR # 通常在 pkg-config 正确配置后不需要
-
-            echo "已为 aarch64 设置交叉编译环境变量 (CC, AR, LINKER, PKG_CONFIG_PATH) 并清除了 OPENSSL_* 相关的覆盖设置。"
+            echo "  (aarch64) CC: $CC_aarch64_unknown_linux_gnu"
+            echo "  (aarch64) AR: $AR_aarch64_unknown_linux_gnu"
+            echo "  (aarch64) LINKER: $CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER"
+            echo "  (aarch64) PKG_CONFIG_PATH: $PKG_CONFIG_PATH"
+          else
+            echo "为主机 (${{ matrix.target.rust_target }}) 配置环境 (OpenSSL 通常无需特殊设置)..."
+            # 对于 x86_64 或其他主机架构，pkg-config 应该能自动找到主机上安装的 libssl-dev
+            # 无需设置 PKG_CONFIG_PATH 或其他 OpenSSL 特定变量
           fi
+          
+          echo "执行 cargo build 前的环境变量状态 (相关部分):"
+          echo "  OPENSSL_DIR: '${OPENSSL_DIR:-已取消设置}'" # 使用 BASH 变量替换显示是否已取消设置
+          echo "  OPENSSL_LIB_DIR: '${OPENSSL_LIB_DIR:-已取消设置}'"
+          echo "  OPENSSL_INCLUDE_DIR: '${OPENSSL_INCLUDE_DIR:-已取消设置}'"
+          echo "  PKG_CONFIG_PATH: '${PKG_CONFIG_PATH:-未设置或继承}'"
           
           cargo build --release --locked --target ${{ matrix.target.rust_target }}
           echo "为 ${{ matrix.target.name }} 构建完成。"
