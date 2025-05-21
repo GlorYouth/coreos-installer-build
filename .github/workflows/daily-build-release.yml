@@ -69,7 +69,7 @@ jobs:
           unzip coreos-installer-source.zip -d coreos-installer-source
           # 解压后通常会在一个顶层目录，例如 coreos-installer-coreos-installer-xxxxxxxx
           # 找到实际的源码目录
-          COREOS_INSTALLER_DIR=$(find coreos-installer-source -maxdepth 1 -mindepth 1 -type d -name "coreos-installer-*")
+          COREOS_INSTALLER_DIR=$(find coreos-installer-source -maxdepth 1 -mindepth 1 -type d -name "*coreos-installer-*")
           echo "COREOS_INSTALLER_DIR=$COREOS_INSTALLER_DIR" # 打印调试信息
           echo "coreos_installer_dir=$COREOS_INSTALLER_DIR" >> "$GITHUB_OUTPUT" # 设置为步骤输出变量
           ls -F "$COREOS_INSTALLER_DIR" # 列出内容以确认
