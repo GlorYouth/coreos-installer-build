@@ -45,8 +45,9 @@ jobs:
           RELEASE_INFO=$(curl -s "https://api.github.com/repos/coreos/coreos-installer/releases/latest")
 
           # 提取标签名和zipball URL
+          # 修正：将 .zipball_URL 改为 .zipball_url
           TAG_NAME=$(echo "$RELEASE_INFO" | jq -r .tag_name)
-          ZIPBALL_URL=$(echo "$RELEASE_INFO" | jq -r .zipball_URL)
+          ZIPBALL_URL=$(echo "$RELEASE_INFO" | jq -r .zipball_url)
 
           # 提取版本号前缀 (例如，v0.20.0 -> 0.20.0)
           VERSION_PREFIX=$(echo "$TAG_NAME" | sed 's/^v//')
