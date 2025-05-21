@@ -30,8 +30,8 @@ jobs:
           override: true
 
       - name: Build coreos-installer
-        # 恢复使用 cargo build --release --locked，确保二进制文件在 target/release/
-        run: cargo install coreos-installer --target-dir . && ls
+        # 二进制文件在 /home/runner/.cargo/bin/coreos-installer
+        run: cargo install coreos-installer && cp /home/runner/.cargo/bin/coreos-installer ./coreos-installer
 
       - name: Calculate current coreos-installer SHA256 and save to file
         id: calculate_sha
