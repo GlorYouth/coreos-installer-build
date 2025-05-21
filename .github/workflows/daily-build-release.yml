@@ -12,7 +12,7 @@ on:
     # 允许手动触发此工作流
     inputs:
       force_release:
-        description: '强制发布新版本，即使版本号没有变化 (Force a new release even if version has not changed)'
+        description: '强制发布新版本，即使版本号没有变化' # 完全使用中文描述
         required: false
         default: false
         type: boolean
@@ -217,12 +217,12 @@ jobs:
       - name: Install build dependencies for ${{ matrix.target.name }} # 为 ${{ matrix.target.name }} 安装构建依赖
         run: |
           sudo apt-get update
-          sudo apt-get install -y libzstd-dev
+          sudo apt-get install -y libzstd-dev # 对所有目标通用
           
           if [ "${{ matrix.target.rust_target }}" = "aarch64-unknown-linux-gnu" ]; then
-            # 安装交叉编译工具和依赖
-            echo "正在为 aarch64 安装交叉编译工具..."
-            sudo apt-get install -y crossbuild-essential-arm64
+            # 安装交叉编译工具和针对 arm64 的 OpenSSL 开发库
+            echo "正在为 aarch64 安装交叉编译工具和 libssl-dev:arm64..."
+            sudo apt-get install -y crossbuild-essential-arm64 libssl-dev:arm64
           fi
 
       - name: Setup Rust toolchain for ${{ matrix.target.name }} # 为 ${{ matrix.target.name }} 设置 Rust 工具链
@@ -234,17 +234,12 @@ jobs:
           target: ${{ matrix.target.rust_target }}
 
       - name: Build coreos-installer for ${{ matrix.target.name }} # 为 ${{ matrix.target.name }} 构建 coreos-installer
-        env: # 在这里为每个构建目标设置优化环境变量
-          CARGO_PROFILE_RELEASE_OPT_LEVEL: "z"  # 优化大小
-          CARGO_PROFILE_RELEASE_LTO: "fat"      # 链接时优化
-          CARGO_PROFILE_RELEASE_CODEGEN_UNITS: "1" # 单个代码生成单元，可能提高优化但编译较慢
-          CARGO_PROFILE_RELEASE_PANIC: "abort"  # panic 时直接终止
-          CARGO_PROFILE_RELEASE_STRIP: "symbols" # 剥离符号信息
-          # 针对 aarch64 交叉编译设置，帮助 openssl-sys 找到库
-          # 注意：这里假设 crossbuild-essential-arm64 将库安装到标准路径
-          PKG_CONFIG_PATH: /usr/lib/aarch64-linux-gnu/pkgconfig:${{ env.PKG_CONFIG_PATH }}
-          OPENSSL_DIR: /usr/aarch64-linux-gnu # 通常不需要，但有时有帮助
-          PKG_CONFIG_SYSROOT_DIR: / # 对于交叉编译，有时需要指向 sysroot
+        env: # 通用优化环境变量，适用于所有目标
+          CARGO_PROFILE_RELEASE_OPT_LEVEL: "z"
+          CARGO_PROFILE_RELEASE_LTO: "fat"
+          CARGO_PROFILE_RELEASE_CODEGEN_UNITS: "1"
+          CARGO_PROFILE_RELEASE_PANIC: "abort"
+          CARGO_PROFILE_RELEASE_STRIP: "symbols"
         run: |
           echo "开始为 ${{ matrix.target.name }} (Rust target: ${{ matrix.target.rust_target }}) 构建 coreos-installer..."
           # 进入下载的源码目录进行编译
@@ -254,12 +249,27 @@ jobs:
           cargo --version
           echo "构建目标: ${{ matrix.target.rust_target }}"
 
-          # 如果是 aarch64，设置 CC 环境变量
+          # 针对 aarch64 交叉编译设置特定的环境变量
           if [ "${{ matrix.target.rust_target }}" = "aarch64-unknown-linux-gnu" ]; then
             export CC_aarch64_unknown_linux_gnu=aarch64-linux-gnu-gcc
             export AR_aarch64_unknown_linux_gnu=aarch64-linux-gnu-ar
             export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc
-            echo "已为 aarch64 设置交叉编译环境变量。"
+            
+            # 设置 PKG_CONFIG_PATH 以便 pkg-config 能找到 aarch64 的 .pc 文件
+            # 这是让 openssl-sys 找到正确 OpenSSL 库和头文件的关键
+            if [ -z "$PKG_CONFIG_PATH" ]; then
+              export PKG_CONFIG_PATH="/usr/lib/aarch64-linux-gnu/pkgconfig"
+            else
+              export PKG_CONFIG_PATH="/usr/lib/aarch64-linux-gnu/pkgconfig:$PKG_CONFIG_PATH"
+            fi
+            
+            # 清除可能导致问题的 OPENSSL_* 环境变量，让 pkg-config 发挥作用
+            unset OPENSSL_DIR
+            unset OPENSSL_LIB_DIR
+            unset OPENSSL_INCLUDE_DIR
+            unset PKG_CONFIG_SYSROOT_DIR # 通常在 pkg-config 正确配置后不需要
+
+            echo "已为 aarch64 设置交叉编译环境变量 (CC, AR, LINKER, PKG_CONFIG_PATH) 并清除了 OPENSSL_* 相关的覆盖设置。"
           fi
           
           cargo build --release --locked --target ${{ matrix.target.rust_target }}
