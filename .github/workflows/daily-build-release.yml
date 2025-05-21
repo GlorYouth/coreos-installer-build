@@ -220,11 +220,31 @@ jobs:
           sudo apt-get install -y libzstd-dev pkg-config # 安装通用依赖
           
           if [ "${{ matrix.target.rust_target }}" = "aarch64-unknown-linux-gnu" ]; then
-            echo "为 aarch64 添加架构并更新包列表..."
+            echo "为 aarch64 配置 APT 以支持多架构..."
             sudo dpkg --add-architecture arm64
-            sudo apt-get update # 关键：在添加架构后再次更新，以获取 arm64 包列表
+            
+            echo "--- /etc/apt/sources.list 内容 ---"
+            cat /etc/apt/sources.list || echo "/etc/apt/sources.list 不存在或无法读取"
+            echo "--- /etc/apt/sources.list.d/ 目录内容 ---"
+            ls -l /etc/apt/sources.list.d/ || echo "/etc/apt/sources.list.d/ 不存在或无法列出"
+            echo "--- /etc/apt/sources.list.d/ 各文件内容 ---"
+            for f in /etc/apt/sources.list.d/*.list; do
+              if [ -f "$f" ]; then
+                echo "--- 内容: $f ---"
+                cat "$f"
+              fi
+            done
+            echo "--- 在 /etc/apt/ 搜索 deb 和 deb-src 行 ---"
+            grep -rPh --include='*.list' '^\s*deb(-src)?\s+' /etc/apt/sources.list /etc/apt/sources.list.d/ || echo "在 APT 源配置中未找到有效的 deb/deb-src 行"
+
+            echo "清理 APT 缓存..."
+            sudo apt-get clean
+            
+            echo "再次更新包列表 (包含 arm64)..."
+            sudo apt-get update -o Acquire::Retries=3
+            
             echo "正在为 aarch64 安装交叉编译工具和 libssl-dev:arm64..."
-            sudo apt-get install -y crossbuild-essential-arm64 libssl-dev:arm64
+            sudo apt-get install -y -o Acquire::Retries=3 crossbuild-essential-arm64 libssl-dev:arm64
           else
             # 对于 x86_64 (主机) 构建, 确保主机 OpenSSL 开发库已安装
             echo "正在为主机 (${{ matrix.target.rust_target }}) 安装 libssl-dev..."
