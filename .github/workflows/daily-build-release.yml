@@ -168,11 +168,11 @@ jobs:
           - name: x86_64-linux-musl
             rust_target: x86_64-unknown-linux-musl
             arch_suffix: x86_64-musl
-            c_compiler: musl-gcc # 为 x86_64-musl 设置 C 编译器
+            c_compiler: musl-gcc 
           - name: arm64-linux-musl
             rust_target: aarch64-unknown-linux-musl
             arch_suffix: aarch64-musl
-            c_compiler: aarch64-linux-gnu-gcc # 交叉编译器
+            c_compiler: aarch64-linux-gnu-gcc 
     permissions:
       contents: read # 只需读取源码
       actions: write # 授予写入权限以上传 artifacts
@@ -230,11 +230,14 @@ jobs:
             sudo apt-get install -y libssl-dev
             echo "验证主机 OpenSSL 和 Zstd .pc 和 .a 文件..."
             if ! ls -l /usr/lib/x86_64-linux-gnu/pkgconfig/openssl.pc /usr/lib/x86_64-linux-gnu/libssl.a /usr/lib/x86_64-linux-gnu/libcrypto.a > /dev/null 2>&1; then
-                echo "警告: 主机的 OpenSSL .pc 或 .a 文件未在 /usr/lib/x86_64-linux-gnu/ 中找到。"
+                echo "错误: 主机的 OpenSSL .pc 或 .a 文件未在 /usr/lib/x86_64-linux-gnu/ 中找到。"
+                exit 1
             fi
             if ! ls -l /usr/lib/x86_64-linux-gnu/pkgconfig/libzstd.pc /usr/lib/x86_64-linux-gnu/libzstd.a > /dev/null 2>&1; then
-                echo "警告: 主机的 Zstd .pc 或 .a 文件未在 /usr/lib/x86_64-linux-gnu/ 中找到。"
+                echo "错误: 主机的 Zstd .pc 或 .a 文件未在 /usr/lib/x86_64-linux-gnu/ 中找到。"
+                exit 1
             fi
+            echo "主机 OpenSSL 和 Zstd 的 .pc 和 .a 文件已找到。"
           fi
 
       - name: Setup Rust toolchain for ${{ matrix.target.name }} # 为 ${{ matrix.target.name }} 设置 Rust 工具链
@@ -258,21 +261,36 @@ jobs:
           echo "开始为 ${{ matrix.target.name }} (Rust target: ${{ matrix.target.rust_target }}) 构建 coreos-installer..."
           cd "${{ steps.download_source.outputs.coreos_installer_dir }}"
           
-          unset OPENSSL_DIR OPENSSL_LIB_DIR OPENSSL_INCLUDE_DIR
+          # 清理可能冲突的环境变量
+          unset OPENSSL_DIR OPENSSL_LIB_DIR OPENSSL_INCLUDE_DIR 
           unset PKG_CONFIG PKG_CONFIG_PATH PKG_CONFIG_LIBDIR PKG_CONFIG_SYSROOT_DIR
+          # 将 CFLAGS 和 CXXFLAGS 清空，避免污染
+          export CFLAGS=""
+          export CXXFLAGS=""
 
           if [[ "${{ matrix.target.rust_target }}" == "x86_64-unknown-linux-musl" ]]; then
             export CC="${{ matrix.target.c_compiler }}" # musl-gcc
             export CXX="musl-g++"
             export CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER="${{ matrix.target.c_compiler }}"
+            
+            # 为 openssl-sys 设置特定环境变量
+            export OPENSSL_DIR="/usr" 
+            export OPENSSL_LIB_DIR="/usr/lib/x86_64-linux-gnu"
+            export OPENSSL_INCLUDE_DIR="/usr/include/x86_64-linux-gnu" # 需要这个路径下的 openssl/opensslconf.h
+
+            # 为 zstd-sys (及其他) 配置 pkg-config
             HOST_PKG_CONFIG=$(command -v pkg-config)
             if [ -z "$HOST_PKG_CONFIG" ]; then echo "错误: 主机 pkg-config 未找到。" >&2; exit 1; fi
             export PKG_CONFIG="$HOST_PKG_CONFIG"
-            export CFLAGS="-I/usr/include -I/usr/include/x86_64-linux-gnu"
+            export PKG_CONFIG_LIBDIR="/usr/lib/x86_64-linux-gnu/pkgconfig"
+
             export RUSTFLAGS="-Lnative=/usr/lib/x86_64-linux-gnu"
             export LIBRARY_PATH="/usr/lib/x86_64-linux-gnu:${LIBRARY_PATH:-}"
+            
             echo "  (x86_64-musl) CC: $CC, CXX: $CXX, LINKER: $CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER"
-            echo "  (x86_64-musl) PKG_CONFIG: $PKG_CONFIG, CFLAGS: $CFLAGS, RUSTFLAGS: $RUSTFLAGS, LIBRARY_PATH: $LIBRARY_PATH"
+            echo "  (x86_64-musl) OPENSSL_LIB_DIR: $OPENSSL_LIB_DIR, OPENSSL_INCLUDE_DIR: $OPENSSL_INCLUDE_DIR"
+            echo "  (x86_64-musl) PKG_CONFIG: $PKG_CONFIG, PKG_CONFIG_LIBDIR: $PKG_CONFIG_LIBDIR"
+            echo "  (x86_64-musl) RUSTFLAGS: $RUSTFLAGS, LIBRARY_PATH: $LIBRARY_PATH, CFLAGS: '$CFLAGS', CXXFLAGS: '$CXXFLAGS'"
             $PKG_CONFIG --static --debug --cflags --libs openssl || echo "pkg-config openssl (static) 失败"
             $PKG_CONFIG --static --debug --cflags --libs libzstd || echo "pkg-config libzstd (static) 失败"
 
@@ -280,16 +298,25 @@ jobs:
             export CC="${{ matrix.target.c_compiler }}" # aarch64-linux-gnu-gcc
             export CXX="aarch64-linux-gnu-g++"
             export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER="${{ matrix.target.c_compiler }}"
+
+            # 为 openssl-sys 设置特定环境变量
+            export OPENSSL_DIR="/usr"
+            export OPENSSL_LIB_DIR="/usr/lib/aarch64-linux-gnu"
+            export OPENSSL_INCLUDE_DIR="/usr/include/aarch64-linux-gnu"
+
+            # 为 zstd-sys (及其他) 配置 pkg-config (交叉编译)
             HOST_PKG_CONFIG=$(command -v pkg-config)
             if [ -z "$HOST_PKG_CONFIG" ]; then echo "错误: 主机 pkg-config 未找到。" >&2; exit 1; fi
             export PKG_CONFIG="$HOST_PKG_CONFIG"
             export PKG_CONFIG_ALLOW_CROSS_COMPILE=true
             export PKG_CONFIG_LIBDIR="/usr/lib/aarch64-linux-gnu/pkgconfig" 
-            export CFLAGS="-I/usr/aarch64-linux-gnu/include -I/usr/include/aarch64-linux-gnu"
+            
             export RUSTFLAGS="-Lnative=/usr/lib/aarch64-linux-gnu" 
             export LIBRARY_PATH="/usr/lib/aarch64-linux-gnu:${LIBRARY_PATH:-}"
             echo "  (aarch64-musl) CC: $CC, CXX: $CXX, LINKER: $CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER"
-            echo "  (aarch64-musl) PKG_CONFIG: $PKG_CONFIG, PKG_CONFIG_LIBDIR: $PKG_CONFIG_LIBDIR, CFLAGS: $CFLAGS, RUSTFLAGS: $RUSTFLAGS, LIBRARY_PATH: $LIBRARY_PATH"
+            echo "  (aarch64-musl) OPENSSL_LIB_DIR: $OPENSSL_LIB_DIR, OPENSSL_INCLUDE_DIR: $OPENSSL_INCLUDE_DIR"
+            echo "  (aarch64-musl) PKG_CONFIG: $PKG_CONFIG, PKG_CONFIG_LIBDIR: $PKG_CONFIG_LIBDIR"
+            echo "  (aarch64-musl) RUSTFLAGS: $RUSTFLAGS, LIBRARY_PATH: $LIBRARY_PATH, CFLAGS: '$CFLAGS', CXXFLAGS: '$CXXFLAGS'"
             $PKG_CONFIG --static --debug --cflags --libs openssl || echo "pkg-config openssl (static, aarch64) 失败"
             $PKG_CONFIG --static --debug --cflags --libs libzstd || echo "pkg-config libzstd (static, aarch64) 失败"
           fi
@@ -404,5 +431,6 @@ jobs:
             - `SHA256SUMS-musl` (包含以上所有 MUSL 二进制文件的校验和)
 
             *注意: 此构建基于官方发布的源码。请在使用前验证校验和。*
-          files: release_assets/* # 上传 'release_assets' 目录下的所有文件
+          files: release_assets/*
+          env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
