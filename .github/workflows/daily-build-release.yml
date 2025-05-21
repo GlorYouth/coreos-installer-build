@@ -296,9 +296,8 @@ jobs:
           echo "开始为 ${{ matrix.target.name }} (Rust target: ${{ matrix.target.rust_target }}) 构建 coreos-installer..."
           cd "${{ steps.download_source.outputs.coreos_installer_dir }}"
           
-          # 通用设置 ZSTD_INCLUDE_DIR (通常 /usr/include 即可)
           if [ -d "/usr/include" ]; then 
-              export ZSTD_INCLUDE_DIR="/usr/include"
+              export ZSTD_INCLUDE_DIR="/usr/include" # Zstd 通常能通过 pkg-config 找到，或其头文件在标准路径
           fi
           
           if [[ "${{ matrix.target.rust_target }}" == "x86_64-unknown-linux-musl" ]]; then
@@ -306,43 +305,34 @@ jobs:
             export CXX="musl-g++" 
             export CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER="${{ matrix.target.c_compiler }}"
             
-            # 移除 OPENSSL_*_DIR 的显式设置，强制依赖 pkg-config
-            # export OPENSSL_LIB_DIR="${{ matrix.target.target_lib_path }}" 
-            # export OPENSSL_INCLUDE_DIR="/usr/include" # 已移除
-            export ZSTD_LIB_DIR="${{ matrix.target.target_lib_path }}" # Zstd 通常能通过 pkg-config 找到
+            # 为 openssl-sys 精确设置环境变量
+            export OPENSSL_DIR="/usr" # 指向包含 include/openssl 和 lib 的基础目录
+            export OPENSSL_LIB_DIR="${{ matrix.target.target_lib_path }}" # /usr/lib/x86_64-linux-gnu
+            # 通过 OPENSSL_CFLAGS 传递架构特定的头文件路径给 openssl-sys 的构建脚本
+            export OPENSSL_CFLAGS="-I/usr/include/x86_64-linux-gnu"
+            
+            export ZSTD_LIB_DIR="${{ matrix.target.target_lib_path }}" 
             
             HOST_PKG_CONFIG=$(command -v pkg-config)
             if [ -z "$HOST_PKG_CONFIG" ]; then echo "错误: 主机 pkg-config 未找到。" >&2; exit 1; fi
             export PKG_CONFIG="$HOST_PKG_CONFIG"
             export PKG_CONFIG_LIBDIR="${{ matrix.target.target_pkgconfig_libdir }}" 
 
-            export RUSTFLAGS="-Lnative=${{ matrix.target.target_lib_path }}" # 链接器仍然需要知道库的路径
+            export RUSTFLAGS="-Lnative=${{ matrix.target.target_lib_path }}" 
             export LIBRARY_PATH="${{ matrix.target.target_lib_path }}:${LIBRARY_PATH:-}"
 
             echo "  (x86_64-musl) CC: $CC, CXX: $CXX, LINKER: $CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER"
+            echo "  (x86_64-musl) OPENSSL_DIR: $OPENSSL_DIR"
+            echo "  (x86_64-musl) OPENSSL_LIB_DIR: $OPENSSL_LIB_DIR"
+            echo "  (x86_64-musl) OPENSSL_CFLAGS: $OPENSSL_CFLAGS"
+            echo "  (x86_64-musl) ZSTD_LIB_DIR: $ZSTD_LIB_DIR, ZSTD_INCLUDE_DIR: $ZSTD_INCLUDE_DIR"
             echo "  (x86_64-musl) PKG_CONFIG: $PKG_CONFIG, PKG_CONFIG_LIBDIR: $PKG_CONFIG_LIBDIR"
             echo "  (x86_64-musl) RUSTFLAGS: $RUSTFLAGS, LIBRARY_PATH: $LIBRARY_PATH"
             
-            echo "详细调试 pkg-config for openssl (x86_64-musl 目标):"
-            echo "  PKG_CONFIG_PATH: $PKG_CONFIG_PATH"
-            echo "  PKG_CONFIG_LIBDIR: $PKG_CONFIG_LIBDIR"
-            echo "  检查 openssl.pc 文件:"
-            ls -l "$PKG_CONFIG_LIBDIR/openssl.pc" || echo "  openssl.pc 未在 $PKG_CONFIG_LIBDIR 中找到"
-            echo "  openssl.pc 文件内容:"
-            cat "$PKG_CONFIG_LIBDIR/openssl.pc" || echo "  无法读取 openssl.pc"
-            echo "  运行: $PKG_CONFIG --debug --exists --print-errors openssl"
-            $PKG_CONFIG --debug --exists --print-errors openssl
-            echo "  运行: $PKG_CONFIG --modversion openssl"
-            $PKG_CONFIG --modversion openssl || echo "  pkg-config --modversion openssl 失败"
-            echo "  运行: $PKG_CONFIG --static --cflags openssl"
-            OPENSSL_CFLAGS=$($PKG_CONFIG --static --cflags openssl) || echo "  pkg-config --static --cflags openssl 失败"
-            echo "  OPENSSL_CFLAGS: $OPENSSL_CFLAGS"
-            echo "  运行: $PKG_CONFIG --static --libs openssl"
-            $PKG_CONFIG --static --libs openssl || echo "  pkg-config --static --libs openssl 失败"
-
-            echo "详细调试 pkg-config for libzstd (x86_64-musl 目标):"
-            ls -l "$PKG_CONFIG_LIBDIR/libzstd.pc" || echo "  libzstd.pc 未在 $PKG_CONFIG_LIBDIR 中找到"
-            $PKG_CONFIG --exists --print-errors libzstd && $PKG_CONFIG --modversion libzstd && $PKG_CONFIG --static --cflags libzstd && $PKG_CONFIG --static --libs libzstd || echo "  pkg-config for libzstd 失败"
+            echo "尝试 pkg-config for openssl (可能仍然失败，但 OPENSSL_* 变量应优先):"
+            $PKG_CONFIG --static --print-errors --cflags --libs openssl || echo "  pkg-config openssl (static) 失败或未找到."
+            echo "尝试 pkg-config for libzstd:"
+            $PKG_CONFIG --static --print-errors --cflags --libs libzstd || echo "  pkg-config libzstd (static) 失败或未找到."
 
 
           elif [[ "${{ matrix.target.rust_target }}" == "aarch64-unknown-linux-musl" ]]; then
@@ -350,12 +340,16 @@ jobs:
             export CXX="aarch64-linux-gnu-g++"
             export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER="${{ matrix.target.c_compiler }}"
             
-            export OPENSSL_LIB_DIR="${{ matrix.target.target_lib_path }}" 
+            export OPENSSL_DIR="/usr" # 对于交叉编译，这指向主机的 /usr，但 include/lib 路径会被覆盖
+            export OPENSSL_LIB_DIR="${{ matrix.target.target_lib_path }}" # /usr/lib/aarch64-linux-gnu
+            export OPENSSL_INCLUDE_DIR="/usr/include/aarch64-linux-gnu" # 明确指定 aarch64 的 include 路径
+                                                                    # 同时，OPENSSL_DIR="/usr" 也能帮助找到 /usr/include/openssl
+            
             export ZSTD_LIB_DIR="${{ matrix.target.target_lib_path }}"    
-            # 对于 aarch64，OPENSSL_INCLUDE_DIR 和 CFLAGS 仍然需要，因为交叉编译环境更复杂
-            if [ -d "/usr/include/openssl" ]; then # 主机通用 OpenSSL 头文件
-                export OPENSSL_INCLUDE_DIR="/usr/include"
-            fi
+            export ZSTD_INCLUDE_DIR="/usr/include/aarch64-linux-gnu" # 如果 zstd:arm64 的头文件也在这里
+            # 如果 zstd:arm64 的头文件在 /usr/include，则 ZSTD_INCLUDE_DIR="${ZSTD_INCLUDE_DIR}" (来自通用设置) 即可
+
+            # CFLAGS_aarch64_unknown_linux_musl 仍然有用，因为它会被 cc crate 用于编译传递给它的C文件
             export CFLAGS_aarch64_unknown_linux_musl="${{ matrix.target.target_cflags }}" # -I/usr/include/aarch64-linux-gnu
 
             HOST_PKG_CONFIG=$(command -v pkg-config)
@@ -366,6 +360,7 @@ jobs:
             export RUSTFLAGS="-Lnative=${{ matrix.target.target_lib_path }}" 
             export LIBRARY_PATH="${{ matrix.target.target_lib_path }}:${LIBRARY_PATH:-}"
             echo "  (aarch64-musl) CC: $CC, CXX: $CXX, LINKER: $CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER"
+            echo "  (aarch64-musl) OPENSSL_DIR: $OPENSSL_DIR"
             echo "  (aarch64-musl) OPENSSL_LIB_DIR: $OPENSSL_LIB_DIR, OPENSSL_INCLUDE_DIR: $OPENSSL_INCLUDE_DIR"
             echo "  (aarch64-musl) ZSTD_LIB_DIR: $ZSTD_LIB_DIR, ZSTD_INCLUDE_DIR: $ZSTD_INCLUDE_DIR"
             echo "  (aarch64-musl) PKG_CONFIG: $PKG_CONFIG, PKG_CONFIG_LIBDIR: $PKG_CONFIG_LIBDIR"
