@@ -296,6 +296,9 @@ jobs:
           # 注意：这里假设 crossbuild-essential-arm64 将库安装到 /usr/lib/aarch64-linux-gnu/pkgconfig
           # 如果实际路径不同，可能需要调整
           PKG_CONFIG_PATH: /usr/lib/aarch64-linux-gnu/pkgconfig:${{ env.PKG_CONFIG_PATH }}
+          # 显式设置 OPENSSL_DIR 和 PKG_CONFIG_SYSROOT_DIR
+          OPENSSL_DIR: /usr/aarch64-linux-gnu
+          PKG_CONFIG_SYSROOT_DIR: /usr/aarch64-linux-gnu
         run: |
           # 进入下载的源码目录进行编译
           cd "${{ steps.download_source.outputs.coreos_installer_dir }}" # 使用步骤输出
