@@ -30,7 +30,7 @@ jobs:
           override: true
 
       - name: Build coreos-installer
-        run: cargo install coreos-installer --path .
+        run: cargo install coreos-installer --target-dir .
 
       - name: Calculate current coreos-installer SHA256
         id: calculate_sha
