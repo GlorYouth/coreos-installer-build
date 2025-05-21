@@ -423,5 +423,6 @@ jobs:
             - `SHA256SUMS-musl` (包含以上所有 MUSL 二进制文件的校验和)
 
             *注意: 此构建基于官方发布的源码。请在使用前验证校验和。*
-          files: release_assets/* env:
+          files: release_assets/* 
+          env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
