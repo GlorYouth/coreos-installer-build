@@ -41,16 +41,34 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y jq
 
-          # 获取最新 Release 的 JSON 数据
           RELEASE_INFO=$(curl -s "https://api.github.com/repos/coreos/coreos-installer/releases/latest")
+          
+          # 检查 RELEASE_INFO 是否为空
+          if [ -z "$RELEASE_INFO" ]; then
+            echo "Error: Failed to fetch latest release info from GitHub API. RELEASE_INFO is empty."
+            exit 1
+          fi
 
           # 提取标签名和zipball URL
-          # 修正：将 .zipball_URL 改为 .zipball_url
           TAG_NAME=$(echo "$RELEASE_INFO" | jq -r .tag_name)
           ZIPBALL_URL=$(echo "$RELEASE_INFO" | jq -r .zipball_url)
-
-          # 提取版本号前缀 (例如，v0.20.0 -> 0.20.0)
           VERSION_PREFIX=$(echo "$TAG_NAME" | sed 's/^v//')
+
+          # 检查提取的值是否为空/null
+          if [ -z "$TAG_NAME" ] || [ "$TAG_NAME" = "null" ]; then
+            echo "Error: Could not extract tag_name from release info. Raw RELEASE_INFO:"
+            echo "$RELEASE_INFO"
+            exit 1
+          fi
+          if [ -z "$ZIPBALL_URL" ] || [ "$ZIPBALL_URL" = "null" ]; then
+            echo "Error: Could not extract zipball_url from release info. Raw RELEASE_INFO:"
+            echo "$RELEASE_INFO"
+            exit 1
+          fi
+          if [ -z "$VERSION_PREFIX" ] || [ "$VERSION_PREFIX" = "null" ]; then
+            echo "Error: Could not determine version_prefix from tag_name: $TAG_NAME"
+            exit 1
+          fi
 
           echo "Latest coreos-installer release tag: $TAG_NAME"
           echo "Latest coreos-installer zipball URL: $ZIPBALL_URL"
@@ -66,10 +84,26 @@ jobs:
         run: |
           # 从上一步获取的URL下载源码压缩包
           curl -L "${{ steps.get_release.outputs.zipball_url }}" -o coreos-installer-source.zip
+          
+          # 检查下载是否成功（简单检查文件是否存在）
+          if [ ! -f coreos-installer-source.zip ]; then
+            echo "Error: Failed to download coreos-installer source.zip. URL used: ${{ steps.get_release.outputs.zipball_url }}"
+            exit 1
+          fi
+
           unzip coreos-installer-source.zip -d coreos-installer-source
-          # 解压后通常会在一个顶层目录，例如 coreos-installer-coreos-installer-xxxxxxxx
+          
           # 找到实际的源码目录
-          COREOS_INSTALLER_DIR=$(find coreos-installer-source -maxdepth 1 -mindepth 1 -type d -name "*coreos-installer-*")
+          COREOS_INSTALLER_DIR=$(find coreos-installer-source -maxdepth 1 -mindepth 1 -type d -name "coreos-installer-*")
+          
+          # 检查 COREOS_INSTALLER_DIR 是否找到
+          if [ -z "$COREOS_INSTALLER_DIR" ]; then
+            echo "Error: Could not find the coreos-installer source directory after unzipping."
+            echo "Content of coreos-installer-source:"
+            ls -F coreos-installer-source/ || true # 列出内容，如果目录不存在则忽略错误
+            exit 1
+          fi
+
           echo "COREOS_INSTALLER_DIR=$COREOS_INSTALLER_DIR" # 打印调试信息
           echo "coreos_installer_dir=$COREOS_INSTALLER_DIR" >> "$GITHUB_OUTPUT" # 设置为步骤输出变量
           ls -F "$COREOS_INSTALLER_DIR" # 列出内容以确认
@@ -193,16 +227,31 @@ jobs:
       - name: Checkout your repository
         uses: actions/checkout@v4
 
-      # 移除了原有的“Get official coreos-installer release info from previous job”步骤
-      # 因为相关变量已在 Job 级别 env 中定义
-
       - name: Download coreos-installer official release source
         id: download_source # 为此步骤添加ID
         run: |
           # 从环境变量中的URL下载源码压缩包
           curl -L "${{ env.RELEASE_ZIP_URL }}" -o coreos-installer-source.zip
+          
+          # 检查下载是否成功（简单检查文件是否存在）
+          if [ ! -f coreos-installer-source.zip ]; then
+            echo "Error: Failed to download coreos-installer source.zip. URL used: ${{ env.RELEASE_ZIP_URL }}"
+            exit 1
+          fi
+
           unzip coreos-installer-source.zip -d coreos-installer-source
+          
+          # 找到实际的源码目录
           COREOS_INSTALLER_DIR=$(find coreos-installer-source -maxdepth 1 -mindepth 1 -type d -name "coreos-installer-*")
+          
+          # 检查 COREOS_INSTALLER_DIR 是否找到
+          if [ -z "$COREOS_INSTALLER_DIR" ]; then
+            echo "Error: Could not find the coreos-installer source directory after unzipping."
+            echo "Content of coreos-installer-source:"
+            ls -F coreos-installer-source/ || true # 列出内容，如果目录不存在则忽略错误
+            exit 1
+          fi
+
           echo "COREOS_INSTALLER_DIR=$COREOS_INSTALLER_DIR" # 打印调试信息
           echo "coreos_installer_dir=$COREOS_INSTALLER_DIR" >> "$GITHUB_OUTPUT" # 设置为步骤输出变量
 
