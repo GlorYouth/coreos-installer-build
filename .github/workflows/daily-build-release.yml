@@ -22,70 +22,48 @@ jobs:
   get-latest-release-info:
     runs-on: ubuntu-latest
     outputs:
-      release_tag: ${{ steps.get_release.outputs.tag_name }}               # 输出最新的官方 Release 标签 (例如 v0.20.0)
-      release_url: ${{ steps.get_release.outputs.zipball_url }}           # 输出最新官方 Release 的源码下载 URL
-      release_version_prefix: ${{ steps.get_release.outputs.version_prefix }} # 输出版本前缀 (例如 0.20.0)
+      release_tag: ${{ steps.get_official_release.outputs.official_release_tag }}     # 输出官方 coreos-installer 的最新 Release 标签
+      release_url: ${{ steps.get_official_release.outputs.official_zipball_url }}    # 输出官方 coreos-installer 最新 Release 的源码下载 URL
+      release_version_prefix: ${{ steps.get_official_release.outputs.official_version_prefix }} # 输出从官方标签提取的版本前缀
       date_tag: ${{ steps.get_date.outputs.date_tag }}                     # 输出当前日期标签 (例如 20231026)
       date_name: ${{ steps.get_date.outputs.date_name }}                   # 输出当前日期名称 (例如 2023-10-26)
-      needs_release: ${{ steps.compare_versions.outputs.needs_release }}   # 输出是否需要发布新版本的标志 (true/false)
+      needs_release: ${{ steps.determine_release_need.outputs.needs_release }}   # 输出是否需要发布新版本的标志 (true/false)
     permissions:
-      contents: write # 为了写入文件 (如果需要提交回仓库的话，但这里主要用于 artifact)
-      actions: write  # 授予写入权限以上传/下载 artifacts
+      contents: read # 检出代码和进行 API 调用（针对本仓库）通常需要读取权限
 
     steps:
       - name: Checkout your repository # 检出当前仓库代码
         uses: actions/checkout@v4
 
       - name: Get latest coreos-installer official release info # 获取 coreos-installer 官方最新 Release 信息
-        id: get_release
+        id: get_official_release
         run: |
-          # 使用 GitHub API 获取 coreos-installer 官方仓库的最新 Release
-          # 我们需要 jq 来解析 JSON
-          sudo apt-get update
-          sudo apt-get install -y jq
-
-          RELEASE_INFO=$(curl -s "https://api.github.com/repos/coreos/coreos-installer/releases/latest")
-          
-          # 检查 RELEASE_INFO 是否为空
-          if [ -z "$RELEASE_INFO" ]; then
-            echo "错误：未能从 GitHub API 获取最新的 Release 信息。RELEASE_INFO 为空。"
+          # 安装 jq
+          sudo apt-get update && sudo apt-get install -y jq
+          OFFICIAL_RELEASE_INFO=$(curl -s -L "https://api.github.com/repos/coreos/coreos-installer/releases/latest")
+          if [ -z "$OFFICIAL_RELEASE_INFO" ] || [ "$(echo "$OFFICIAL_RELEASE_INFO" | jq -r .message)" = "Not Found" ]; then
+            echo "错误：未能从 coreos/coreos-installer 获取最新的 Release 信息。"
             exit 1
           fi
+          OFFICIAL_TAG_NAME=$(echo "$OFFICIAL_RELEASE_INFO" | jq -r .tag_name)
+          OFFICIAL_ZIPBALL_URL=$(echo "$OFFICIAL_RELEASE_INFO" | jq -r .zipball_url)
+          OFFICIAL_VERSION_PREFIX=$(echo "$OFFICIAL_TAG_NAME" | sed 's/^v//')
 
-          # 提取标签名和zipball URL
-          TAG_NAME=$(echo "$RELEASE_INFO" | jq -r .tag_name)
-          ZIPBALL_URL=$(echo "$RELEASE_INFO" | jq -r .zipball_url)
-          VERSION_PREFIX=$(echo "$TAG_NAME" | sed 's/^v//') # 移除标签名前的 'v'
+          if [ -z "$OFFICIAL_TAG_NAME" ] || [ "$OFFICIAL_TAG_NAME" = "null" ]; then echo "错误：无法从官方 Release 信息中提取 tag_name。" >&2; exit 1; fi
+          if [ -z "$OFFICIAL_ZIPBALL_URL" ] || [ "$OFFICIAL_ZIPBALL_URL" = "null" ]; then echo "错误：无法从官方 Release 信息中提取 zipball_url。" >&2; exit 1; fi
+          if [ -z "$OFFICIAL_VERSION_PREFIX" ] || [ "$OFFICIAL_VERSION_PREFIX" = "null" ]; then echo "错误：无法从官方 tag_name ($OFFICIAL_TAG_NAME) 中确定 version_prefix。" >&2; exit 1; fi
 
-          # 检查提取的值是否为空/null
-          if [ -z "$TAG_NAME" ] || [ "$TAG_NAME" = "null" ]; then
-            echo "错误：无法从 Release 信息中提取 tag_name。原始 RELEASE_INFO："
-            echo "$RELEASE_INFO"
-            exit 1
-          fi
-          if [ -z "$ZIPBALL_URL" ] || [ "$ZIPBALL_URL" = "null" ]; then
-            echo "错误：无法从 Release 信息中提取 zipball_url。原始 RELEASE_INFO："
-            echo "$RELEASE_INFO"
-            exit 1
-          fi
-          if [ -z "$VERSION_PREFIX" ] || [ "$VERSION_PREFIX" = "null" ]; then
-            echo "错误：无法从 tag_name ($TAG_NAME) 中确定 version_prefix。"
-            exit 1
-          fi
+          echo "官方 coreos-installer 最新 Release 标签: $OFFICIAL_TAG_NAME"
+          echo "官方 coreos-installer 最新 zipball URL: $OFFICIAL_ZIPBALL_URL"
+          echo "官方 coreos-installer 版本前缀: $OFFICIAL_VERSION_PREFIX"
 
-          echo "最新的 coreos-installer Release 标签: $TAG_NAME"
-          echo "最新的 coreos-installer zipball URL: $ZIPBALL_URL"
-          echo "用于资产的版本前缀: $VERSION_PREFIX"
-
-          # 设置为输出变量
-          echo "tag_name=$TAG_NAME" >> "$GITHUB_OUTPUT"
-          echo "zipball_url=$ZIPBALL_URL" >> "$GITHUB_OUTPUT"
-          echo "version_prefix=$VERSION_PREFIX" >> "$GITHUB_OUTPUT"
+          echo "official_release_tag=$OFFICIAL_TAG_NAME" >> "$GITHUB_OUTPUT"
+          echo "official_zipball_url=$OFFICIAL_ZIPBALL_URL" >> "$GITHUB_OUTPUT"
+          echo "official_version_prefix=$OFFICIAL_VERSION_PREFIX" >> "$GITHUB_OUTPUT"
 
       - name: Get Current Date # 获取当前日期
         id: get_date
         run: |
-          # 获取当前日期并设置为输出变量
           CURRENT_DATE_TAG=$(date +%Y%m%d)
           CURRENT_DATE_NAME=$(date +%Y-%m-%d)
           echo "date_tag=$CURRENT_DATE_TAG" >> "$GITHUB_OUTPUT"
@@ -93,71 +71,61 @@ jobs:
           echo "当前日期标签: $CURRENT_DATE_TAG"
           echo "当前日期名称: $CURRENT_DATE_NAME"
 
-      - name: Prepare current version file # 准备当前版本文件
-        id: prepare_current_version
+      - name: Get latest own repository release info # 获取本仓库的最新 Release 信息
+        id: get_own_latest_release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }} # 使用 GITHUB_TOKEN 进行认证
         run: |
-          # 将当前的官方版本号保存到工作区根目录下的文件中，用于后续上传 artifact
-          echo "${{ steps.get_release.outputs.tag_name }}" > coreos_installer_version.txt
-          echo "已将当前版本 ${{ steps.get_release.outputs.tag_name }} 写入 coreos_installer_version.txt"
+          OWN_RELEASE_INFO=$(curl -s -L -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github.v3+json" "https://api.github.com/repos/${{ github.repository }}/releases/latest")
+          OWN_LATEST_RELEASE_TAG="" # 默认为空字符串
 
-      - name: Download previous version artifact # 下载上一次记录的版本号 artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: previous-coreos-version # artifact 名称
-          path: ./downloaded_artifacts/ # 下载路径
-        continue-on-error: true # 如果 artifact 不存在 (例如首次运行)，则继续执行
-
-      - name: Compare with Previous Version # 与上一个记录的版本进行比较
-        id: compare_versions
-        run: |
-          # 下载的构件会存放在 ./downloaded_artifacts/previous-coreos-version/ 目录下
-          # 文件名与上传时一致
-          DOWNLOADED_PREVIOUS_VERSION_FILE="./downloaded_artifacts/previous-coreos-version/coreos_installer_version.txt"
-          PREVIOUS_VERSION=""
-
-          if [ -f "$DOWNLOADED_PREVIOUS_VERSION_FILE" ]; then
-            PREVIOUS_VERSION=$(cat "$DOWNLOADED_PREVIOUS_VERSION_FILE")
-            echo "上一次记录的 coreos-installer 版本号 (来自 artifact): $PREVIOUS_VERSION"
+          # 检查API调用是否成功并且返回了有效的JSON
+          if echo "$OWN_RELEASE_INFO" | jq -e .tag_name > /dev/null 2>&1; then
+            OWN_LATEST_RELEASE_TAG=$(echo "$OWN_RELEASE_INFO" | jq -r .tag_name)
+            echo "本仓库最新 Release 标签: $OWN_LATEST_RELEASE_TAG"
           else
-            echo "未找到上一次记录的 coreos-installer 版本号 artifact (文件 $DOWNLOADED_PREVIOUS_VERSION_FILE 不存在)。"
+            # 如果 jq 失败 (例如因为 "Not Found" 消息不是有效 JSON 或 .tag_name 不存在)
+            echo "本仓库中未找到 Release，或无法解析最新的 Release 信息。"
+            # OWN_LATEST_RELEASE_TAG 保持为空
+          fi
+          echo "own_latest_release_tag=$OWN_LATEST_RELEASE_TAG" >> "$GITHUB_OUTPUT"
+
+      - name: Determine if Release is Needed # 根据版本比较决定是否需要发布
+        id: determine_release_need
+        run: |
+          CURRENT_OFFICIAL_TAG="${{ steps.get_official_release.outputs.official_release_tag }}"
+          OWN_LATEST_TAG_FULL="${{ steps.get_own_latest_release.outputs.own_latest_release_tag }}"
+          
+          PREVIOUS_OFFICIAL_EQUIVALENT_TAG=""
+          if [ -n "$OWN_LATEST_TAG_FULL" ] && [ "$OWN_LATEST_TAG_FULL" != "null" ]; then
+            # 从本仓库的 Release 标签 (例如 v0.24.0-20250521) 提取核心版本部分 (例如 v0.24.0)
+            PREVIOUS_OFFICIAL_EQUIVALENT_TAG=$(echo "$OWN_LATEST_TAG_FULL" | cut -d'-' -f1)
+            echo "本仓库最新 Release 标签中的核心版本部分: $PREVIOUS_OFFICIAL_EQUIVALENT_TAG"
+          else
+            echo "本仓库中未找到之前的有效 Release 标签。"
           fi
 
-          CURRENT_VERSION="${{ steps.get_release.outputs.tag_name }}"
           NEEDS_RELEASE="false"
-
-          # 检查触发事件类型和 force_release 输入
           EVENT_NAME="${{ github.event_name }}"
           FORCE_RELEASE_INPUT="${{ github.event.inputs.force_release }}"
 
           echo "当前事件名称: $EVENT_NAME"
           echo "强制发布输入: $FORCE_RELEASE_INPUT"
-          echo "当前官方最新版本: $CURRENT_VERSION"
+          echo "CoreOS/coreos-installer 最新官方 Release 标签: $CURRENT_OFFICIAL_TAG"
 
-          if [ "$EVENT_NAME" = "push" ]; then
-              NEEDS_RELEASE="true"
-              echo "工作流由 push 事件触发。需要发布新版本 (跳过版本号比较)。"
-          elif [ "$FORCE_RELEASE_INPUT" = "true" ]; then
+          if [ "$FORCE_RELEASE_INPUT" = "true" ]; then
               NEEDS_RELEASE="true"
               echo "强制发布输入为 true。需要发布新版本 (跳过版本号比较)。"
-          elif [ -z "$PREVIOUS_VERSION" ]; then # 首次运行或者 artifact 已过期或未成功下载
+          elif [ -z "$PREVIOUS_OFFICIAL_EQUIVALENT_TAG" ]; then
               NEEDS_RELEASE="true"
-              echo "未找到上一个版本号 (首次运行、artifact 已过期或下载失败)。需要发布新版本。"
-          elif [ "$CURRENT_VERSION" != "$PREVIOUS_VERSION" ]; then
+              echo "本仓库中未找到之前的有效 Release 或无法解析其核心版本。需要发布新版本。"
+          elif [ "$CURRENT_OFFICIAL_TAG" != "$PREVIOUS_OFFICIAL_EQUIVALENT_TAG" ]; then
               NEEDS_RELEASE="true"
-              echo "官方版本号已更新 (当前: $CURRENT_VERSION, 上次记录: $PREVIOUS_VERSION)。需要发布新版本。"
+              echo "官方 coreos-installer 版本已更新 (官方最新: $CURRENT_OFFICIAL_TAG, 本仓库上次构建基于的官方版本: $PREVIOUS_OFFICIAL_EQUIVALENT_TAG)。需要发布新版本。"
           else
-              echo "官方版本号未发生变化 (均为 $CURRENT_VERSION)。不需要发布新版本。"
+              echo "官方 coreos-installer 版本未发生变化 (均为 $CURRENT_OFFICIAL_TAG，与本仓库上次构建基于的官方版本一致)。不需要发布新版本。"
           fi
-
           echo "needs_release=$NEEDS_RELEASE" >> "$GITHUB_OUTPUT"
-
-      - name: Upload current version as artifact # 上传当前版本号作为 artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: previous-coreos-version # artifact 名称，用于下次比较
-          path: coreos_installer_version.txt # 上传位于工作区根目录的文件
-          # retention-days: 7 # artifact 保留天数，可以根据需要调整或移除以使用默认值
-        if: always() # 无论比较结果如何，都尝试上传（如果文件已准备好）
 
   # 步骤 2: 多架构构建 Job
   build-multi-arch:
@@ -167,7 +135,7 @@ jobs:
     runs-on: ubuntu-latest
     env: # 将所需变量提升到 Job 级别环境变量
       RELEASE_ZIP_URL: ${{ needs.get-latest-release-info.outputs.release_url }}
-      COREOS_INSTALLER_OFFICIAL_TAG: ${{ needs.get-latest-release-info.outputs.release_tag }}
+      COREOS_INSTALLER_OFFICIAL_TAG: ${{ needs.get-latest-release-info.outputs.release_tag }} # 这是官方的标签
       RELEASE_VERSION_PREFIX: ${{ needs.get-latest-release-info.outputs.release_version_prefix }}
       ARM64_UBUNTU_PORTS_SOURCES: | # 为 arm64 定义 APT 源文件内容 (来自 ports.ubuntu.com)
         Types: deb
