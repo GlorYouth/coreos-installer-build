@@ -239,7 +239,7 @@ jobs:
         run: |
           # 对于所有架构，首先更新现有的 (默认为 amd64) 包列表并安装通用依赖
           sudo apt-get update
-          sudo apt-get install -y libzstd-dev pkg-config
+          sudo apt-get install -y libzstd-dev pkg-config # 确保 pkg-config 已安装
           
           if [ "${{ matrix.target.rust_target }}" = "aarch64-unknown-linux-gnu" ]; then
             echo "为 aarch64 配置 APT 以支持多架构..."
@@ -247,13 +247,9 @@ jobs:
             
             echo "覆盖 /etc/apt/sources.list.d/ubuntu.sources 使其仅用于 amd64..."
             echo "$AMD64_ONLY_UBUNTU_SOURCES" | sudo tee /etc/apt/sources.list.d/ubuntu.sources > /dev/null
-            # echo "--- /etc/apt/sources.list.d/ubuntu.sources (已修改为仅 amd64) 内容 ---" # 调试时可以取消注释
-            # cat /etc/apt/sources.list.d/ubuntu.sources
 
             echo "创建 arm64 特定源文件指向 ports.ubuntu.com..."
             echo "$ARM64_UBUNTU_PORTS_SOURCES" | sudo tee /etc/apt/sources.list.d/arm64-ubuntu-ports.sources > /dev/null
-            # echo "--- /etc/apt/sources.list.d/arm64-ubuntu-ports.sources 内容 ---" # 调试时可以取消注释
-            # cat /etc/apt/sources.list.d/arm64-ubuntu-ports.sources
 
             echo "清理 APT 缓存..."
             sudo apt-get clean
@@ -262,8 +258,21 @@ jobs:
             sudo apt-get update -o Acquire::Retries=3 -o APT::Get::Always-Include-Phased-Updates=true
             
             echo "正在为 aarch64 安装交叉编译工具和 libssl-dev:arm64..."
-            # 确保安装时也考虑重试
             sudo apt-get install -y -o Acquire::Retries=3 crossbuild-essential-arm64 libssl-dev:arm64
+            
+            echo "验证 aarch64-linux-gnu-pkg-config 是否已安装且可用..."
+            if ! command -v aarch64-linux-gnu-pkg-config &> /dev/null; then
+                echo "错误: aarch64-linux-gnu-pkg-config 未找到。请检查 crossbuild-essential-arm64 是否正确安装。"
+                # 尝试查找 pkg-config-aarch64-linux-gnu，某些系统可能使用此名称
+                if command -v pkg-config-aarch64-linux-gnu &> /dev/null; then
+                    echo "找到了 pkg-config-aarch64-linux-gnu，将创建符号链接..."
+                    sudo ln -sf $(command -v pkg-config-aarch64-linux-gnu) /usr/bin/aarch64-linux-gnu-pkg-config
+                else
+                    exit 1
+                fi
+            fi
+            echo "aarch64-linux-gnu-pkg-config 路径: $(command -v aarch64-linux-gnu-pkg-config)"
+
           else
             # 对于 x86_64 (主机) 构建, 确保主机 OpenSSL 开发库已安装
             echo "正在为主机 (${{ matrix.target.rust_target }}) 安装 libssl-dev..."
@@ -307,18 +316,24 @@ jobs:
             export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc
             
             # 明确指定 pkg-config 可执行文件和路径
-            export PKG_CONFIG_SYSROOT_DIR=/ # 尝试设置 sysroot
-            export PKG_CONFIG_PATH="/usr/lib/aarch64-linux-gnu/pkgconfig"
-            export PKG_CONFIG="aarch64-linux-gnu-pkg-config"
+            # 首先获取 aarch64-linux-gnu-pkg-config 的完整路径
+            AARCH64_PKG_CONFIG_BIN=$(command -v aarch64-linux-gnu-pkg-config)
+            if [ -z "$AARCH64_PKG_CONFIG_BIN" ]; then
+              echo "错误: 无法找到 aarch64-linux-gnu-pkg-config。构建中止。"
+              exit 1
+            fi
+            export PKG_CONFIG="$AARCH64_PKG_CONFIG_BIN"
+            export PKG_CONFIG_PATH="/usr/lib/aarch64-linux-gnu/pkgconfig:${PKG_CONFIG_PATH:-}" # 附加到现有路径 (如果存在)
+            # PKG_CONFIG_SYSROOT_DIR 通常不需要，除非 .pc 文件中的路径是相对于 sysroot 的
+            # export PKG_CONFIG_SYSROOT_DIR=/ 
             
             echo "  (aarch64) CC: $CC_aarch64_unknown_linux_gnu"
             echo "  (aarch64) AR: $AR_aarch64_unknown_linux_gnu"
             echo "  (aarch64) LINKER: $CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER"
-            echo "  (aarch64) PKG_CONFIG: $(command -v $PKG_CONFIG || echo '未找到')"
-            echo "  (aarch64) PKG_CONFIG_PATH: $PKG_CONFIG_PATH"
-            echo "  (aarch64) PKG_CONFIG_SYSROOT_DIR: $PKG_CONFIG_SYSROOT_DIR"
+            echo "  (aarch64) PKG_CONFIG (将使用的可执行文件): $PKG_CONFIG"
+            echo "  (aarch64) PKG_CONFIG_PATH (将搜索的 .pc 文件路径): $PKG_CONFIG_PATH"
 
-            echo "使用 aarch64-linux-gnu-pkg-config 调试 OpenSSL:"
+            echo "使用 $PKG_CONFIG 调试 OpenSSL:"
             $PKG_CONFIG --debug --exists --print-errors openssl || echo "openssl 未被 $PKG_CONFIG 找到 (错误码: $?)"
             echo "OpenSSL 版本: $($PKG_CONFIG --modversion openssl || echo '获取版本失败')"
             echo "OpenSSL 库: $($PKG_CONFIG --libs openssl || echo '获取库失败')"
@@ -326,6 +341,13 @@ jobs:
 
           else
             echo "为主机 (${{ matrix.target.rust_target }}) 配置环境 (OpenSSL 通常无需特殊设置)..."
+            # 对于 x86_64，确保 pkg-config 可用
+             if ! command -v pkg-config &> /dev/null; then
+                echo "错误: 主机 pkg-config 未找到。"
+                exit 1
+            fi
+            export PKG_CONFIG=$(command -v pkg-config)
+            echo "  (主机) PKG_CONFIG: $PKG_CONFIG"
           fi
           
           echo "执行 cargo build 前的环境变量状态 (相关部分):"
@@ -334,7 +356,6 @@ jobs:
           echo "  OPENSSL_INCLUDE_DIR: '${OPENSSL_INCLUDE_DIR:-已取消设置}'"
           echo "  PKG_CONFIG: '${PKG_CONFIG:-未设置或继承}'"
           echo "  PKG_CONFIG_PATH: '${PKG_CONFIG_PATH:-未设置或继承}'"
-          echo "  PKG_CONFIG_SYSROOT_DIR: '${PKG_CONFIG_SYSROOT_DIR:-未设置或继承}'"
           
           cargo build --release --locked --target ${{ matrix.target.rust_target }}
           echo "为 ${{ matrix.target.name }} 构建完成。"
