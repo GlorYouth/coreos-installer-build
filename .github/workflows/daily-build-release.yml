@@ -82,14 +82,19 @@ jobs:
         run: |
           echo "image_repo_lowercase=ghcr.io/$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')/$(echo '${{ github.event.repository.name }}' | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_OUTPUT"
 
-  # 步骤 2: 并行构建各个架构的容器镜像
+  # 步骤 2: 并行构建各个架构的容器镜像 (原生构建)
   build-per-arch:
     needs: get-release-info
     if: needs.get-release-info.outputs.needs_release == 'true'
-    runs-on: ubuntu-latest
     strategy:
+      fail-fast: false
       matrix:
-        arch: [amd64, arm64]
+        include:
+          - arch: amd64
+            os: ubuntu-latest
+          - arch: arm64
+            os: ubuntu-24.04-arm
+    runs-on: ${{ matrix.os }} # 动态选择原生 Runner
     permissions:
       contents: read
       packages: write
@@ -97,9 +102,7 @@ jobs:
       - name: 检出仓库代码 (包含 Dockerfile)
         uses: actions/checkout@v4
 
-      - name: 设置 QEMU
-        uses: docker/setup-qemu-action@v3
-
+      # 注意：因为是在原生 Runner 上构建，不再需要 setup-qemu-action
       - name: 设置 Docker Buildx
         uses: docker/setup-buildx-action@v3
 
@@ -162,7 +165,7 @@ jobs:
       packages: read   # 需要读取权限才能从 GHCR 拉取镜像
 
     steps:
-      - name: 设置 QEMU
+      - name: 设置 QEMU (仅用于 docker cp)
         uses: docker/setup-qemu-action@v3
 
       - name: 登录到 GitHub Container Registry (GHCR)
