@@ -416,14 +416,10 @@ jobs:
           echo "准备 x86_64 固定名称资产 (latest)..."
           cp "./downloaded_release_assets/coreos-installer-x86_64/coreos-installer-x86_64" \
              "release_assets/coreos-installer-x86_64-latest"
-          cp "./downloaded_release_assets/coreos-installer-x86_64/coreos-installer-x86_64.sha256" \
-             "release_assets/coreos-installer-x86_64-latest.sha256"
 
           echo "准备 aarch64 固定名称资产 (latest)..."
           cp "./downloaded_release_assets/coreos-installer-aarch64/coreos-installer-aarch64" \
              "release_assets/coreos-installer-aarch64-latest"
-          cp "./downloaded_release_assets/coreos-installer-aarch64/coreos-installer-aarch64.sha256" \
-             "release_assets/coreos-installer-aarch64-latest.sha256"
           
           echo "Release 资产准备完成。目录 'release_assets' 内容:"
           ls -l release_assets/
