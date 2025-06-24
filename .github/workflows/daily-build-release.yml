@@ -26,7 +26,7 @@ jobs:
       date_tag: ${{ steps.get_date.outputs.date_tag }}
       date_name: ${{ steps.get_date.outputs.date_name }}
       needs_release: ${{ steps.determine_release_need.outputs.needs_release }}
-      image_repo: ghcr.io/${{ github.repository_owner }}/${{ github.event.repository.name }}
+      image_repo: ${{ steps.prepare_names.outputs.image_repo_lowercase }}
     permissions:
       contents: read # 检出代码和调用API需要读取权限
 
@@ -76,6 +76,11 @@ jobs:
             echo "版本未变化，无需发布新版本。"
             echo "needs_release=false" >> "$GITHUB_OUTPUT"
           fi
+
+      - name: 准备仓库名称的小写版本
+        id: prepare_names
+        run: |
+          echo "image_repo_lowercase=ghcr.io/$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')/$(echo '${{ github.event.repository.name }}' | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_OUTPUT"
 
   # 步骤 2: 构建并推送多架构容器镜像
   build-and-push-image:
