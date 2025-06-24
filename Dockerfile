@@ -10,14 +10,14 @@ FROM rust:alpine AS builder
 ARG TARGETARCH
 
 # 1. 安装构建依赖
-# 增加了 zstd-static 和 openssl-static 以支持静态链接
+# 将 openssl-static 替换为正确的 libcrypto-static 和 libssl-static 包。
 # - git: 用于从 GitHub 克隆源代码。
 # - build-base: 包含了 gcc, make 等基础编译工具。
 # - pkgconf: 是 Alpine 下的 pkg-config 实现。
 # - openssl-dev & zstd-dev: 提供动态库和头文件。
-# - zstd-static & openssl-static: 提供静态库 (.a 文件) 以供链接器使用。
+# - zstd-static, libcrypto-static, libssl-static: 提供静态库 (.a 文件) 以供链接器使用。
 # - clang: 用于 C/C++ 代码的编译，通常与 Rust 配合良好。
-RUN apk add --no-cache git build-base clang pkgconf openssl-dev zstd-dev zstd-static openssl-static
+RUN apk add --no-cache git build-base clang pkgconf openssl-dev zstd-dev zstd-static libcrypto-static libssl-static
 
 # 2. 设置工作目录
 WORKDIR /usr/src/app
