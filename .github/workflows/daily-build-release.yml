@@ -130,6 +130,9 @@ jobs:
     permissions:
       packages: write
     steps:
+      - name: 设置 Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
       - name: 登录到 GitHub Container Registry (GHCR)
         uses: docker/login-action@v3
         with:
@@ -143,17 +146,14 @@ jobs:
           VERSION_TAG="${{ needs.get-release-info.outputs.image_repo }}:${{ needs.get-release-info.outputs.release_tag }}-${{ needs.get-release-info.outputs.date_tag }}"
           LATEST_TAG="${{ needs.get-release-info.outputs.image_repo }}:latest"
           
-          echo "正在为 ${VERSION_TAG} 创建清单"
-          docker manifest create "${VERSION_TAG}" \
-            "${VERSION_TAG}-amd64" \
-            "${VERSION_TAG}-arm64"
-          docker manifest push "${VERSION_TAG}"
+          AMD64_IMAGE="${VERSION_TAG}-amd64"
+          ARM64_IMAGE="${VERSION_TAG}-arm64"
 
-          echo "正在为 ${LATEST_TAG} 创建清单"
-          docker manifest create "${LATEST_TAG}" \
-            "${VERSION_TAG}-amd64" \
-            "${VERSION_TAG}-arm64"
-          docker manifest push "${LATEST_TAG}"
+          echo "正在为 ${VERSION_TAG} 和 ${LATEST_TAG} 创建清单..."
+          
+          # 使用 docker buildx imagetools 来创建和推送清单
+          # 这个工具更健壮，可以正确处理作为输入的单一条目清单，并且可以用 -t 添加多个标签
+          docker buildx imagetools create -t "${VERSION_TAG}" -t "${LATEST_TAG}" "${AMD64_IMAGE}" "${ARM64_IMAGE}"
 
   # 步骤 4: 提取二进制文件并创建 GitHub Release
   create-release-with-assets:
