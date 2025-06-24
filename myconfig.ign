@@ -1,0 +1,15 @@
+{
+  "ignition": {
+    "version": "3.5.0"
+  },
+  "passwd": {
+    "users": [
+      {
+        "name": "core",
+        "sshAuthorizedKeys": [
+          "example example@email.com"
+        ]
+      }
+    ]
+  }
+}
