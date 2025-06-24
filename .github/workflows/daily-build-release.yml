@@ -82,11 +82,14 @@ jobs:
         run: |
           echo "image_repo_lowercase=ghcr.io/$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')/$(echo '${{ github.event.repository.name }}' | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_OUTPUT"
 
-  # 步骤 2: 构建并推送多架构容器镜像
-  build-and-push-image:
+  # 步骤 2: 并行构建各个架构的容器镜像
+  build-per-arch:
     needs: get-release-info
     if: needs.get-release-info.outputs.needs_release == 'true'
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        arch: [amd64, arm64]
     permissions:
       contents: read
       packages: write
@@ -107,20 +110,51 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: 构建并推送镜像
+      - name: 为 ${{ matrix.arch }} 构建并推送镜像
         uses: docker/build-push-action@v5
         with:
           context: .
           file: ./Dockerfile
-          platforms: linux/amd64,linux/arm64
+          platforms: linux/${{ matrix.arch }}
           push: true
-          tags: |
-            ${{ needs.get-release-info.outputs.image_repo }}:${{ needs.get-release-info.outputs.release_tag }}-${{ needs.get-release-info.outputs.date_tag }}
-            ${{ needs.get-release-info.outputs.image_repo }}:latest
+          tags: ${{ needs.get-release-info.outputs.image_repo }}:${{ needs.get-release-info.outputs.release_tag }}-${{ needs.get-release-info.outputs.date_tag }}-${{ matrix.arch }}
 
-  # 步骤 3: 提取二进制文件并创建 GitHub Release
+  # 步骤 3: 将各架构镜像合并为多架构清单
+  create-manifest:
+    needs: [get-release-info, build-per-arch]
+    if: needs.get-release-info.outputs.needs_release == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      packages: write
+    steps:
+      - name: 登录到 GitHub Container Registry (GHCR)
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: 创建并推送多架构清单
+        run: |
+          set -eux
+          VERSION_TAG="${{ needs.get-release-info.outputs.image_repo }}:${{ needs.get-release-info.outputs.release_tag }}-${{ needs.get-release-info.outputs.date_tag }}"
+          LATEST_TAG="${{ needs.get-release-info.outputs.image_repo }}:latest"
+          
+          echo "正在为 ${VERSION_TAG} 创建清单"
+          docker manifest create "${VERSION_TAG}" \
+            "${VERSION_TAG}-amd64" \
+            "${VERSION_TAG}-arm64"
+          docker manifest push "${VERSION_TAG}"
+
+          echo "正在为 ${LATEST_TAG} 创建清单"
+          docker manifest create "${LATEST_TAG}" \
+            "${VERSION_TAG}-amd64" \
+            "${VERSION_TAG}-arm64"
+          docker manifest push "${LATEST_TAG}"
+
+  # 步骤 4: 提取二进制文件并创建 GitHub Release
   create-release-with-assets:
-    needs: [get-release-info, build-and-push-image]
+    needs: [get-release-info, create-manifest]
     if: needs.get-release-info.outputs.needs_release == 'true'
     runs-on: ubuntu-latest
     permissions:
